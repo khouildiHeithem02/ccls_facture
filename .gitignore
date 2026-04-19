@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+env/
+.env
+
+# Database
+*.db
+*.sqlite3
+
+# Generated PDFs
+*.pdf
+
+# Local state
+counter.txt
+
+# OS specific
+.DS_Store
+Thumbs.db

@@ -97,6 +97,17 @@ def init_db():
     if "role" not in user_cols:
         cursor.execute("ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'user'")
     
+    # Settings table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    ''')
+    
+    # Initialize default settings
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('max_products_per_invoice', '5')")
+    
     # Check if admin user exists, if not create default
     cursor.execute("SELECT * FROM users WHERE username = 'admin'")
     if not cursor.fetchone():
@@ -117,6 +128,12 @@ def init_db():
             ("Tretical", 4300)
         ]
         cursor.executemany("INSERT INTO products_metadata (name, price) VALUES (?, ?)", initial_products)
+
+    # --- PERFORMANCE INDEXES (Lag Fix) ---
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_invoices_wilaya ON invoices(wilaya)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(payment_status)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_invoices_farmer ON invoices(farmer_name)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_products_nature ON products(nature)")
 
     conn.commit()
     conn.close()
@@ -505,3 +522,24 @@ def delete_db_product(name):
     conn.commit()
     conn.close()
     return True
+
+# --- SETTINGS MANAGEMENT ---
+def get_setting(key, default=None):
+    conn = sqlite3.connect("invoices.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else default
+
+def set_setting(key, value):
+    conn = sqlite3.connect("invoices.db")
+    cursor = conn.cursor()
+    try:
+        cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
+        conn.commit()
+        return True
+    except:
+        return False
+    finally:
+        conn.close()

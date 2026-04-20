@@ -15,8 +15,8 @@ def generate_facture_pdf(data, output_path):
         pagesize=A4,
         rightMargin=1*cm,
         leftMargin=1*cm,
-        topMargin=1.5*cm,
-        bottomMargin=1*cm,
+        topMargin=0.5*cm,
+        bottomMargin=0.5*cm,
     )
 
     elements = []
@@ -29,6 +29,7 @@ def generate_facture_pdf(data, output_path):
     try:
         pdfmetrics.registerFont(TTFont('Arial', 'C:\\Windows\\Fonts\\arial.ttf'))
         pdfmetrics.registerFont(TTFont('Arial-Bold', 'C:\\Windows\\Fonts\\arialbd.ttf'))
+        pdfmetrics.registerFontFamily('Arial', normal='Arial', bold='Arial-Bold')
         has_arial = True
     except:
         has_arial = False
@@ -51,7 +52,7 @@ def generate_facture_pdf(data, output_path):
     # Top centered text
     elements.append(Paragraph(reshaped_arabic("الجمهورية الجزائرية الديمقراطية الشعبية"), center_style))
     elements.append(Paragraph("<u>REPUBLIQUE ALGERIENNE DEMOCRATIQUE ET POPULAIRE</u>", center_style_underlined))
-    elements.append(Spacer(1, 10))
+    elements.append(Spacer(1, 5))
 
     # 3-Column Header Table
     fr_text = """Ministère de l'Agriculture et du Développement Rural<br/>
@@ -93,6 +94,8 @@ de Ouargla"""
     elements.append(Spacer(1, 0.2*cm))
     
     nif_text = identity.get('nif', '')
+    if not nif_text or str(nif_text).strip() == '':
+        nif_text = 'Non'
     wilaya_text = identity.get('wilaya', '')
     elements.append(Paragraph(f"<b>Agriculteur:</b> {farmer_text}", fr_left_style_regular))
     if wilaya_text:
@@ -270,12 +273,26 @@ de Ouargla"""
     # No elements.pop() needed since we didn't add layout_t yet.
     elements.append(big_box)
     
-    elements.append(Spacer(1, 0.3*cm))
-    elements.append(Paragraph(f"<b>La présent décompte est arreté a la somme de :</b>", fr_left_style))
-    elements.append(Spacer(1, 0.1*cm))
-    elements.append(Paragraph(f"La présent décompte est arreté a la somme de :", fr_left_style_regular))
+    elements.append(Spacer(1, 0.2*cm))
     
-    elements.append(Spacer(1, 0.3*cm))
+    import math
+    from num2words import num2words
+    net_amount = totals.get('montant_net', 0)
+    entier = int(math.floor(net_amount))
+    decimal = int(round((net_amount - entier) * 100))
+    lettres = num2words(entier, lang='fr') + " Dinars Algériens"
+    if decimal > 0:
+        lettres += " " + num2words(decimal, lang='fr') + " Centimes"
+    lettres = lettres.title()
+    
+    texte_final = f"<b>La présent décompte est arreté a la somme de : </b>{lettres}"
+    elements.append(Paragraph(texte_final, fr_left_style_regular))
+    
+    elements.append(Spacer(1, 0.2*cm))
+    user_acc = identity.get('user_account_name', '')
+    if user_acc:
+        elements.append(Paragraph(f"<b>Par :</b> {user_acc.upper()}", fr_right_style_regular))
+        elements.append(Spacer(1, 0.2*cm))
     date_val = identity.get('date', '')
     elements.append(Paragraph(f"Ouargla le : {date_val}", fr_right_style_regular))
     elements.append(Spacer(1, 0.5*cm))
@@ -304,3 +321,132 @@ de Ouargla"""
     doc.build(elements)
     
     return True
+
+def generate_accumulation_pdf(data, grand_totals, output_path, user_acc, date_val):
+    doc = SimpleDocTemplate(
+        output_path,
+        pagesize=A4,
+        rightMargin=1*cm,
+        leftMargin=1*cm,
+        topMargin=0.5*cm,
+        bottomMargin=0.5*cm,
+    )
+
+    elements = []
+    styles = getSampleStyleSheet()
+    
+    try:
+        pdfmetrics.registerFont(TTFont('Arial', 'C:\\Windows\\Fonts\\arial.ttf'))
+        pdfmetrics.registerFont(TTFont('Arial-Bold', 'C:\\Windows\\Fonts\\arialbd.ttf'))
+        pdfmetrics.registerFontFamily('Arial', normal='Arial', bold='Arial-Bold')
+        has_arial = True
+    except:
+        has_arial = False
+
+    def reshaped_arabic(text):
+        if not has_arial: return text
+        return get_display(arabic_reshaper.reshape(text))
+
+    font_name_bold = 'Arial-Bold' if has_arial else 'Helvetica-Bold'
+    font_name_regular = 'Arial' if has_arial else 'Helvetica'
+
+    center_style = ParagraphStyle('Center', parent=styles['Normal'], alignment=1, fontName=font_name_bold, fontSize=12)
+    center_style_underlined = ParagraphStyle('CenterU', parent=styles['Normal'], alignment=1, fontName=font_name_bold, fontSize=11)
+    fr_left_style = ParagraphStyle('FrLeft', parent=styles['Normal'], alignment=0, fontName=font_name_bold, fontSize=9)
+    fr_left_style_regular = ParagraphStyle('FrLeftReg', parent=styles['Normal'], alignment=0, fontName=font_name_regular, fontSize=9)
+    fr_right_style_regular = ParagraphStyle('FrRightReg', parent=styles['Normal'], alignment=2, fontName=font_name_regular, fontSize=11)
+    ar_right_style = ParagraphStyle('ArRight', parent=styles['Normal'], alignment=2, fontName=font_name_bold, fontSize=10)
+
+    # Header
+    elements.append(Paragraph(reshaped_arabic("الجمهورية الجزائرية الديمقراطية الشعبية"), center_style))
+    elements.append(Paragraph("<u>REPUBLIQUE ALGERIENNE DEMOCRATIQUE ET POPULAIRE</u>", center_style_underlined))
+    elements.append(Spacer(1, 10))
+
+    fr_text = "Ministère de l'Agriculture et du Développement Rural<br/>Office Algérien Interprofessionnel des Céréales<br/>Coopérative des Céréales Et Légumes Secs<br/>de Ouargla"
+    ar_text = f"{reshaped_arabic('وزارة الفلاحة والتنمية الريفية')}<br/>{reshaped_arabic('الديوان الجزائري المهني للحبوب')}<br/>{reshaped_arabic('تعاونية الحبوب والبقول الجافة')}<br/>{reshaped_arabic('ولاية ورقلة')}"
+    
+    logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logo.png')
+    header_logo = Image(logo_path, width=2.5*cm, height=3*cm) if os.path.exists(logo_path) else Paragraph("<b>OAIC</b>", center_style)
+    
+    header_t = Table([[Paragraph(fr_text, fr_left_style), header_logo, Paragraph(ar_text, ar_right_style)]], colWidths=[8*cm, 3*cm, 8*cm])
+    header_t.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'MIDDLE'), ('ALIGN', (1,0), (1,0), 'CENTER')]))
+    elements.append(header_t)
+    elements.append(Spacer(1, 0.5*cm))
+
+    # Report Title
+    elements.append(Paragraph("<b>RAPPORT D'ACCUMULATION FINANCIERE</b>", center_style))
+    elements.append(Spacer(1, 0.5*cm))
+
+    # Main Data Table
+    table_data = [["Nature du Produit", "Agriculteurs", "Qte Totale", "Avant Taxes", "Bonification", "Réfaction", "Montant Brut"]]
+    for row in data:
+        table_data.append([
+            row['nature'],
+            str(row['farmer_count']),
+            f"{row['qte']:,.2f}",
+            f"{row['avant']:,.2f}",
+            f"{row['bon']:,.2f}",
+            f"{row['refac']:,.2f}",
+            f"{row['net_prod']:,.2f}"
+        ])
+    
+    # Grand Totals Row
+    table_data.append([
+        "TOTAL GÉNÉRAL",
+        str(sum(r['farmer_count'] for r in data)),
+        f"{sum(r['qte'] for r in data):,.2f}",
+        f"{grand_totals['total_avant']:,.2f}",
+        f"{grand_totals['total_bon']:,.2f}",
+        f"{grand_totals['total_refac']:,.2f}",
+        f"{grand_totals['total_avant'] + grand_totals['total_bon'] - grand_totals['total_refac']:,.2f}"
+    ])
+
+    col_widths = [4*cm, 2*cm, 2.5*cm, 2.5*cm, 2.5*cm, 2.5*cm, 3*cm]
+    t = Table(table_data, colWidths=col_widths)
+    t.setStyle(TableStyle([
+        ('FONTNAME', (0,0), (-1,0), font_name_bold),
+        ('FONTNAME', (0,-1), (-1,-1), font_name_bold),
+        ('BACKGROUND', (0,0), (-1,0), colors.lightgrey),
+        ('GRID', (0,0), (-1,-1), 1, colors.black),
+        ('ALIGN', (1,1), (-1,-1), 'RIGHT'),
+    ]))
+    elements.append(t)
+    elements.append(Spacer(1, 0.5*cm))
+
+    # Financial Summary Section
+    summary_data = [
+        [Paragraph("<b>TOTAL RETENUES (TAXES) :</b>", fr_left_style_regular), f"- {grand_totals['total_retenues']:,.2f} DA"],
+        [Paragraph("<b>Montant Déjà Payé :</b>", fr_left_style_regular), f"{grand_totals['total_net_paye']:,.2f} DA"],
+        [Paragraph("<b>Reste à Payer :</b>", fr_left_style_regular), f"{grand_totals['total_net_non_paye']:,.2f} DA"],
+        [Paragraph("<b>TOTAL GÉNÉRAL NET :</b>", center_style), f"{grand_totals['total_net']:,.2f} DA"]
+    ]
+    summary_t = Table(summary_data, colWidths=[10*cm, 5*cm])
+    summary_t.setStyle(TableStyle([
+        ('ALIGN', (1,0), (1,-1), 'RIGHT'),
+        ('LINEABOVE', (0,-1), (-1,-1), 1, colors.black),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+    ]))
+    elements.append(summary_t)
+    elements.append(Spacer(1, 1*cm))
+
+    # Footer Info
+    if user_acc:
+        elements.append(Paragraph(f"<b>Par :</b> {user_acc.upper()}", fr_right_style_regular))
+        elements.append(Spacer(1, 0.2*cm))
+    elements.append(Paragraph(f"Ouargla le : {date_val}", fr_right_style_regular))
+    elements.append(Spacer(1, 0.5*cm))
+
+    # Signatures
+    sig_labels_style = ParagraphStyle('SigLabels', parent=styles['Normal'], alignment=1, fontName=font_name_bold, fontSize=10)
+    sig_data = [
+        [Paragraph("CHEF SCE COMMERCIAL", sig_labels_style), Paragraph("CH.RECOUVREMENT", sig_labels_style), Paragraph("LE TRESORIE", sig_labels_style)],
+        [Spacer(1, 1.5*cm), Spacer(1, 1.5*cm), Spacer(1, 1.5*cm)],
+        [Paragraph("AUDITEUR", sig_labels_style), Paragraph("S/DIR/F.C", sig_labels_style), Paragraph("LE DIRECTEUR", sig_labels_style)],
+    ]
+    sig_t = Table(sig_data, colWidths=[6.3*cm, 6.3*cm, 6.3*cm])
+    sig_t.setStyle(TableStyle([('ALIGN', (0,0), (-1,-1), 'CENTER'), ('VALIGN', (0,0), (-1,-1), 'TOP')]))
+    elements.append(sig_t)
+
+    doc.build(elements)
+    return True
+

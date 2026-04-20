@@ -5,7 +5,7 @@ import fitz  # PyMuPDF
 import ctypes
 from PIL import Image
 from tkinter import messagebox
-from pdf_generator import generate_facture_pdf
+from pdf_generator import generate_facture_pdf, generate_accumulation_pdf
 import database
 
 ctk.set_appearance_mode("dark")
@@ -30,11 +30,24 @@ class InvoicePreviewWindow(ctk.CTkToplevel):
     def __init__(self, parent, pdf_path, on_confirm=None, mode="creation"):
         super().__init__(parent)
         self.title("Invoice Preview (Exact Layout)")
-        self.geometry("850x700")
+        
+        # Center horizontally, but pull to top horizontally so bottom buttons aren't cut off
+        w = 850
+        h = 700
+        try:
+            x = (self.winfo_screenwidth() // 2) - (w // 2)
+            self.geometry(f"{w}x{h}+{max(0, x)}+30")
+        except:
+            self.geometry(f"{w}x{h}")
+            
+        self.resizable(True, True)
         self.lift()
         self.on_confirm = on_confirm
         self.pdf_path = pdf_path
         self.mode = mode
+        
+        # Hook the 'X' button to delete the preview file too
+        self.protocol("WM_DELETE_WINDOW", self.on_cancel)
         
         # Make top level modal
         self.grab_set()
@@ -63,7 +76,7 @@ class InvoicePreviewWindow(ctk.CTkToplevel):
                                            fg_color="#1976D2", font=ctk.CTkFont(size=14, weight="bold"), height=40)
             self.btn_print.pack(side="left", expand=True, padx=10)
             
-            self.btn_close = ctk.CTkButton(btn_frame, text="Fermer", command=self.destroy,
+            self.btn_close = ctk.CTkButton(btn_frame, text="Fermer", command=self.on_cancel,
                                            fg_color="gray", font=ctk.CTkFont(size=14), height=40)
             self.btn_close.pack(side="right", expand=True, padx=10)
 
@@ -96,8 +109,8 @@ class InvoicePreviewWindow(ctk.CTkToplevel):
         
     def on_cancel(self):
         try:
-            # Only delete the file in creation mode if cancelled
-            if self.mode == "creation" and os.path.exists(self.pdf_path):
+            # Delete the temp file (always for view, and if cancelled for creation)
+            if os.path.exists(self.pdf_path):
                 os.remove(self.pdf_path)
         except:
             pass
@@ -117,11 +130,55 @@ class InvoicePreviewWindow(ctk.CTkToplevel):
         if self.on_confirm:
             self.on_confirm()
 
+class PasswordDialog(ctk.CTkToplevel):
+    def __init__(self, parent, title="Mot de passe requis", on_success=None):
+        super().__init__(parent)
+        self.title(title)
+        self.geometry("300x170")
+        self.resizable(False, False)
+        self.attributes("-topmost", True)
+        self.grab_set()
+        
+        self.on_success = on_success
+        self.parent_app = parent.master # App is the master of HistoryWindow
+        
+        ctk.CTkLabel(self, text="Entrez votre mot de passe\npour confirmer l'action:", font=ctk.CTkFont(weight="bold")).pack(pady=(15, 5))
+        self.pw_entry = ctk.CTkEntry(self, show="*", width=200)
+        self.pw_entry.pack(pady=10)
+        self.pw_entry.focus()
+        self.pw_entry.bind("<Return>", lambda e: self.verify())
+        
+        ctk.CTkButton(self, text="Confirmer", command=self.verify, fg_color="#FBC02D", text_color="black").pack(pady=5)
+        
+    def verify(self):
+        pw = self.pw_entry.get()
+        username = self.parent_app.username
+        success, _ = database.verify_login(username, pw)
+        if success:
+            if self.on_success:
+                self.on_success()
+            self.destroy()
+        else:
+            messagebox.showerror("Erreur", "Mot de passe incorrect.", parent=self)
+
+
 class HistoryWindow(ctk.CTkToplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("📜 Historique des Factures")
-        self.geometry("950x600")
+        
+        # Center the history window
+        w, h = 950, 600
+        try:
+            x = (self.winfo_screenwidth() // 2) - (w // 2)
+            y = (self.winfo_screenheight() // 2) - (h // 2)
+            self.geometry(f"{w}x{h}+{max(0, x)}+{max(0, y)}")
+        except:
+            self.geometry(f"{w}x{h}")
+            
+        self.resizable(True, True)
+        self.grab_set()
+        self.lift()
         
         # Prevent screenshots for history too
         try:
@@ -158,17 +215,25 @@ class HistoryWindow(ctk.CTkToplevel):
                                               variable=self.product_var, command=lambda _: self.refresh_list(), width=140)
         self.product_menu.pack(side="left", padx=5)
         
+        # Status Filter (NEW)
+        ctk.CTkLabel(filter_frame, text="Statut:").pack(side="left", padx=5)
+        self.status_var = ctk.StringVar(value="Tous")
+        self.status_menu = ctk.CTkOptionMenu(filter_frame, values=["Tous", "Payé", "Non Payé"], 
+                                              variable=self.status_var, command=lambda _: self.refresh_list(), width=100)
+        self.status_menu.pack(side="left", padx=5)
+        
         btn_refresh = ctk.CTkButton(filter_frame, text="🔄 Actualiser", width=100, command=self.refresh_list, fg_color="#37474F")
         btn_refresh.pack(side="right", padx=5)
         
         # Header for the list
         header_frame = ctk.CTkFrame(self, fg_color="gray20")
         header_frame.pack(fill="x", padx=20, pady=0)
-        ctk.CTkLabel(header_frame, text="Facture #", width=120, font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, padx=5)
-        ctk.CTkLabel(header_frame, text="Date", width=120, font=ctk.CTkFont(weight="bold")).grid(row=0, column=1, padx=5)
-        ctk.CTkLabel(header_frame, text="Agriculteur", width=300, font=ctk.CTkFont(weight="bold")).grid(row=0, column=2, padx=5)
-        ctk.CTkLabel(header_frame, text="Montant Net", width=120, font=ctk.CTkFont(weight="bold")).grid(row=0, column=3, padx=5)
-        ctk.CTkLabel(header_frame, text="Actions", width=100, font=ctk.CTkFont(weight="bold")).grid(row=0, column=4, padx=5)
+        ctk.CTkLabel(header_frame, text="Facture #", width=100, font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, padx=5)
+        ctk.CTkLabel(header_frame, text="Date", width=100, font=ctk.CTkFont(weight="bold")).grid(row=0, column=1, padx=5)
+        ctk.CTkLabel(header_frame, text="Agriculteur", width=220, font=ctk.CTkFont(weight="bold")).grid(row=0, column=2, padx=5)
+        ctk.CTkLabel(header_frame, text="Montant Net", width=100, font=ctk.CTkFont(weight="bold")).grid(row=0, column=3, padx=5)
+        ctk.CTkLabel(header_frame, text="Statut", width=100, font=ctk.CTkFont(weight="bold")).grid(row=0, column=4, padx=5)
+        ctk.CTkLabel(header_frame, text="Actions", width=140, font=ctk.CTkFont(weight="bold")).grid(row=0, column=5, padx=5)
         
         # Scrollable list
         self.list_frame = ctk.CTkScrollableFrame(self)
@@ -205,11 +270,12 @@ class HistoryWindow(ctk.CTkToplevel):
         query = self.search_entry.get().strip()
         wilaya = self.wilaya_var.get()
         product = self.product_var.get()
+        status = self.status_var.get()
         
         # Get per-product rows
-        data_grouped = database.get_grouped_accumulation(query if query else None, wilaya, product)
-        # Get overall invoice-level totals (for Net and Retenues)
-        grand_totals = database.get_filtered_totals(query if query else None, wilaya, product)
+        data_grouped = database.get_grouped_accumulation(query if query else None, wilaya, product, status)
+        # Get overall invoice-level totals
+        grand_totals = database.get_filtered_totals(query if query else None, wilaya, product, status)
         
         if not data_grouped:
             messagebox.showinfo("Information", "Aucune donnée à accumuler pour ces filtres.", parent=self)
@@ -225,8 +291,9 @@ class HistoryWindow(ctk.CTkToplevel):
         query = self.search_entry.get().strip()
         wilaya = self.wilaya_var.get()
         product = self.product_var.get()
+        status_filter = self.status_var.get()
         
-        invoices = database.get_all_invoices(query if query else None, wilaya, product)
+        invoices = database.get_all_invoices(query if query else None, wilaya, product, status_filter)
         
         if not invoices:
             ctk.CTkLabel(self.list_frame, text="Aucune facture trouvée.", font=ctk.CTkFont(slant="italic")).pack(pady=20)
@@ -238,45 +305,65 @@ class HistoryWindow(ctk.CTkToplevel):
             dt = inv["date"]
             name = inv["farmer_name"]
             net = inv["total_net"]
-            path = inv["pdf_path"]
+            status_val = inv["payment_status"]
             
             row_frame = ctk.CTkFrame(self.list_frame)
             row_frame.pack(fill="x", pady=2)
             
-            ctk.CTkLabel(row_frame, text=dec, width=120).grid(row=0, column=0, padx=5)
-            ctk.CTkLabel(row_frame, text=dt, width=120).grid(row=0, column=1, padx=5)
-            ctk.CTkLabel(row_frame, text=name, width=300, anchor="w").grid(row=0, column=2, padx=5)
-            ctk.CTkLabel(row_frame, text=f"{net:,.2f} DA", width=120, text_color="#A5D6A7").grid(row=0, column=3, padx=5)
+            ctk.CTkLabel(row_frame, text=dec, width=100).grid(row=0, column=0, padx=5)
+            ctk.CTkLabel(row_frame, text=dt, width=100).grid(row=0, column=1, padx=5)
+            ctk.CTkLabel(row_frame, text=name, width=220, anchor="w").grid(row=0, column=2, padx=5)
+            ctk.CTkLabel(row_frame, text=f"{net:,.2f} DA", width=100, text_color="#A5D6A7").grid(row=0, column=3, padx=5)
+            
+            status_color = "#4CAF50" if status_val == "Payé" else "#F44336"
+            display_stat = f"🟢 {status_val}" if status_val == "Payé" else f"🔴 {status_val}"
+            status_lbl = ctk.CTkLabel(row_frame, text=display_stat, width=100, text_color=status_color)
+            status_lbl.grid(row=0, column=4, padx=5)
             
             actions_frame = ctk.CTkFrame(row_frame, fg_color="transparent")
-            actions_frame.grid(row=0, column=4, padx=5)
+            actions_frame.grid(row=0, column=5, padx=5)
             
-            btn_view = ctk.CTkButton(actions_frame, text="👁️", width=40, font=ctk.CTkFont(size=14),
-                                     command=lambda p=path: self.view_pdf(p))
+            # View Button (Generates from DB temp)
+            btn_view = ctk.CTkButton(actions_frame, text="👁️ Voir", width=60, font=ctk.CTkFont(size=12),
+                                     command=lambda i_id=inv_id: self.view_pdf(i_id))
             btn_view.pack(side="left", padx=2)
-            btn_view.bind("<Enter>", lambda e: self._set_status("👁️ Voir l'aperçu exact de la facture sauvegardée."))
+            btn_view.bind("<Enter>", lambda e: self._set_status("👁️ Recréer et voir la facture."))
             btn_view.bind("<Leave>", self._clear_status)
             
-            btn_regen = ctk.CTkButton(actions_frame, text="🔄", width=40, fg_color="#2E7D32", font=ctk.CTkFont(size=14),
-                                      command=lambda i_id=inv_id: self.regenerate_pdf(i_id))
-            btn_regen.pack(side="left", padx=2)
-            btn_regen.bind("<Enter>", lambda e: self._set_status("🔄 Reconstruire la facture depuis la base de données (si le fichier est perdu)."))
-            btn_regen.bind("<Leave>", self._clear_status)
+            # Toggle Status Button
+            toggle_text = "💳 Payer" if status_val != "Payé" else "❌ Annuler"
+            toggle_color = "#2196F3" if status_val != "Payé" else "#757575"
+            btn_toggle = ctk.CTkButton(actions_frame, text=toggle_text, width=60, fg_color=toggle_color, font=ctk.CTkFont(size=12))
+            btn_toggle.configure(command=lambda i_id=inv_id, s_lbl=status_lbl, btn=btn_toggle: self.toggle_status(i_id, s_lbl, btn))
+            btn_toggle.pack(side="left", padx=2)
 
-    def view_pdf(self, path):
-        if path and os.path.exists(path):
-            InvoicePreviewWindow(self, path, mode="view")
-        else:
-            messagebox.showerror("Erreur", "Le fichier PDF original n'a pas été trouvé à l'emplacement sauvegardé.\nVeuillez utiliser le bouton Régénérer (🔄).", parent=self)
+    def toggle_status(self, inv_id, status_lbl, btn_toggle):
+        current_text = status_lbl.cget("text")
+        is_paid = "🟢 Payé" in current_text
+        current_status = "Payé" if is_paid else "Non Payé"
+        
+        def do_toggle():
+            new_status = "Payé" if current_status != "Payé" else "Non Payé"
+            if database.update_payment_status(inv_id, new_status):
+                # Update widgets in place! No full reload lag!
+                new_color = "#4CAF50" if new_status == "Payé" else "#F44336"
+                new_display = f"🟢 {new_status}" if new_status == "Payé" else f"🔴 {new_status}"
+                status_lbl.configure(text=new_display, text_color=new_color)
+                
+                toggle_text = "💳 Payer" if new_status != "Payé" else "❌ Annuler"
+                toggle_color = "#2196F3" if new_status != "Payé" else "#757575"
+                btn_toggle.configure(text=toggle_text, fg_color=toggle_color)
+                
+        PasswordDialog(self, title="Validation Requise", on_success=do_toggle)
 
-    def regenerate_pdf(self, inv_id):
+    def view_pdf(self, inv_id):
         data = database.get_invoice_details(inv_id)
         if data:
-            farmer_name = data['identity']['farmer']
-            # Clean name for filename
-            farmer_clean = "".join(x for x in farmer_name if x.isalnum() or x in " -_").strip()
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"facture_{farmer_clean}_regen_{timestamp}.pdf"
+            # Inject current user account name for print rendering
+            data['identity']['user_account_name'] = self.master.username
+            
+            # Use a static name to avoid generating multiple temp files on disk
+            filename = "temp_history_view.pdf"
             output_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
             
             try:
@@ -284,14 +371,20 @@ class HistoryWindow(ctk.CTkToplevel):
                 # Open the internal previewer in view mode
                 InvoicePreviewWindow(self, output_path, mode="view")
             except Exception as e:
-                messagebox.showerror("Erreur", f"Échec de la reconstruction: {e}", parent=self)
+                messagebox.showerror("Erreur", f"Échec de l'aperçu: {e}", parent=self)
+        else:
+            messagebox.showerror("Erreur", "Données introuvables.", parent=self)
 
 class AccumulationWindow(ctk.CTkToplevel):
     def __init__(self, parent, data, grand_totals):
         super().__init__(parent)
         self.title("Rapport Financier d'Accumulation")
-        self.geometry("1100x650")
+        self.geometry("1100x700") # Increased height for the button
         self.attributes("-topmost", True)
+        
+        self.accum_data = data
+        self.grand_totals = grand_totals
+        self.parent_app = parent.master # App is the master of HistoryWindow
         
         # Screenshot protection
         try:
@@ -351,7 +444,46 @@ class AccumulationWindow(ctk.CTkToplevel):
         ctk.CTkLabel(self.table_frame, text=f"- {grand_totals['total_retenues']:,.2f}", font=header_font, text_color="#FF8A65").grid(row=row_idx, column=6, padx=5, pady=5)
         row_idx += 1
         
-        ctk.CTkLabel(self.table_frame, text=f"{grand_totals['total_net']:,.2f} DA", font=summary_font, text_color="#A5D6A7").grid(row=row_idx, column=6, padx=5, pady=10)
+        # 4. SPLIT NET TOTALS
+        ctk.CTkLabel(self.table_frame, text=f"Total Déjà Payé:", font=summary_font, text_color="#4CAF50").grid(row=row_idx, column=4, columnspan=2, sticky="e", padx=5, pady=10)
+        ctk.CTkLabel(self.table_frame, text=f"{grand_totals['total_net_paye']:,.2f} DA", font=summary_font, text_color="#4CAF50").grid(row=row_idx, column=6, padx=5, pady=10)
+        row_idx += 1
+        
+        ctk.CTkLabel(self.table_frame, text=f"Reste à Payer:", font=summary_font, text_color="#F44336").grid(row=row_idx, column=4, columnspan=2, sticky="e", padx=5, pady=10)
+        ctk.CTkLabel(self.table_frame, text=f"{grand_totals['total_net_non_paye']:,.2f} DA", font=summary_font, text_color="#F44336").grid(row=row_idx, column=6, padx=5, pady=10)
+        row_idx += 1
+        
+        ctk.CTkLabel(self.table_frame, text=f"Total Général Net:", font=summary_font, text_color="white").grid(row=row_idx, column=4, columnspan=2, sticky="e", padx=5, pady=10)
+        ctk.CTkLabel(self.table_frame, text=f"{grand_totals['total_net']:,.2f} DA", font=summary_font, text_color="white").grid(row=row_idx, column=6, padx=5, pady=10)
+
+        # Footer Button Frame
+        footer_frame = ctk.CTkFrame(self, fg_color="transparent")
+        footer_frame.pack(fill="x", side="bottom", padx=20, pady=10)
+        
+        self.btn_print = ctk.CTkButton(footer_frame, text="🖨️ Imprimer Rapport", command=self.print_report,
+                                       fg_color="#1976D2", font=ctk.CTkFont(size=14, weight="bold"), height=40)
+        self.btn_print.pack(side="right", padx=10)
+        
+        self.btn_close = ctk.CTkButton(footer_frame, text="Fermer", command=self.destroy,
+                                       fg_color="gray", font=ctk.CTkFont(size=14), height=40)
+        self.btn_close.pack(side="right", padx=10)
+
+    def print_report(self):
+        # Use a static name for temp accumulation report
+        filename = "temp_accumulation_report.pdf"
+        output_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+        
+        try:
+            # Get current date from main app or use today
+            date_val = datetime.datetime.now().strftime("%d/%m/%Y")
+            user_acc = self.parent_app.username
+            
+            generate_accumulation_pdf(self.accum_data, self.grand_totals, output_path, user_acc, date_val)
+            # Open the previewer
+            InvoicePreviewWindow(self, output_path, mode="view")
+        except Exception as e:
+            messagebox.showerror("Erreur", f"Échec de l'impression : {e}", parent=self)
+
 
 class AdminPanelWindow(ctk.CTkToplevel):
     def __init__(self, parent):
@@ -378,10 +510,12 @@ class AdminPanelWindow(ctk.CTkToplevel):
         ctk.CTkLabel(add_frame, text="Nouveau Utilisateur:", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=2, pady=5)
         self.new_user_entry = ctk.CTkEntry(add_frame, placeholder_text="Login")
         self.new_user_entry.grid(row=1, column=0, padx=5, pady=5)
+        self.new_user_entry.bind("<Return>", lambda e: self.new_pass_entry.focus())
         self.new_pass_entry = ctk.CTkEntry(add_frame, placeholder_text="Pass", show="*")
         self.new_pass_entry.grid(row=1, column=1, padx=5, pady=5)
+        self.new_pass_entry.bind("<Return>", lambda e: self._add_user_cmd())
         self.new_role_var = ctk.StringVar(value="user")
-        ctk.CTkOptionMenu(add_frame, values=["user", "admin"], variable=self.new_role_var, width=100).grid(row=1, column=2, padx=5, pady=5)
+        ctk.CTkOptionMenu(add_frame, values=["user"], variable=self.new_role_var, width=100, state="disabled").grid(row=1, column=2, padx=5, pady=5)
         
         ctk.CTkButton(add_frame, text="Ajouter", command=self._add_user_cmd, width=80).grid(row=1, column=3, padx=5, pady=5)
         
@@ -424,8 +558,10 @@ class AdminPanelWindow(ctk.CTkToplevel):
         
         self.new_prod_entry = ctk.CTkEntry(add_frame, placeholder_text="Nom du produit")
         self.new_prod_entry.grid(row=0, column=0, padx=5, pady=5)
+        self.new_prod_entry.bind("<Return>", lambda e: self.new_price_entry.focus())
         self.new_price_entry = ctk.CTkEntry(add_frame, placeholder_text="Prix (ex: 6000)")
         self.new_price_entry.grid(row=0, column=1, padx=5, pady=5)
+        self.new_price_entry.bind("<Return>", lambda e: self._add_prod_cmd())
         ctk.CTkButton(add_frame, text="Ajouter Produit", command=self._add_prod_cmd).grid(row=0, column=2, padx=5, pady=5)
         
         list_frame = ctk.CTkScrollableFrame(self.tab_prods, height=300)
@@ -442,6 +578,14 @@ class AdminPanelWindow(ctk.CTkToplevel):
             ctk.CTkLabel(f, text=name, width=200, anchor="w").pack(side="left", padx=10)
             ctk.CTkLabel(f, text=f"{price:,.2f} DA", text_color="#90caf9").pack(side="left", padx=10)
             ctk.CTkButton(f, text="Suppr", width=50, fg_color="#C62828", command=lambda n=name: self._del_prod_cmd(n)).pack(side="right", padx=10)
+            ctk.CTkButton(f, text="Modifier", width=60, fg_color="#1976D2", command=lambda n=name, p=price: self._modify_prod_cmd(n, p)).pack(side="right", padx=5)
+
+    def _modify_prod_cmd(self, name, price):
+        self.new_prod_entry.delete(0, 'end')
+        self.new_prod_entry.insert(0, name)
+        self.new_price_entry.delete(0, 'end')
+        self.new_price_entry.insert(0, str(price))
+        self.new_price_entry.focus()
 
     def _add_prod_cmd(self):
         n = self.new_prod_entry.get().strip()
@@ -500,39 +644,38 @@ class App(ctk.CTkToplevel):
         self.grid_rowconfigure(1, weight=1)  # main content
         
         # --- TOP BAR (Account Info & Disconnect) ---
-        top_bar = ctk.CTkFrame(self, fg_color="#1a1a2e", height=45, corner_radius=0)
+        top_bar = ctk.CTkFrame(self, fg_color="#1a1a2e", height=30, corner_radius=0)
         top_bar.grid(row=0, column=0, sticky="ew", padx=0, pady=0)
         top_bar.grid_columnconfigure(1, weight=1)
         
-        # Account type icon + label
+        # Info Frame (Username + Admin Button)
+        info_frame = ctk.CTkFrame(top_bar, fg_color="transparent")
+        info_frame.grid(row=0, column=0, padx=15, pady=2, sticky="w")
+
         role_display = "Administrateur" if self.role == "admin" else "Utilisateur"
-        account_info = ctk.CTkLabel(top_bar, 
+        account_info = ctk.CTkLabel(info_frame, 
                                     text=f"👤  {self.username.upper()}  |  {role_display}",
                                     font=ctk.CTkFont(size=13, weight="bold"),
                                     text_color="#90caf9")
-        account_info.grid(row=0, column=0, padx=15, pady=8, sticky="w")
+        account_info.pack(side="left")
         
-        # Action Center (Management Buttons)
-        actions_frame = ctk.CTkFrame(top_bar, fg_color="transparent")
-        actions_frame.grid(row=0, column=1, padx=5, pady=0)
-        
-        # History is available to all per user request
-        self.history_btn = ctk.CTkButton(actions_frame, text="📜 Historique", width=120, height=30,
-                                         fg_color="#455A64", command=self.open_history)
-        self.history_btn.pack(side="left", padx=5)
-        
-        # Admin Panel restricted
+        # Admin Panel restricted (Next to user info)
         if self.role == "admin":
-            self.admin_btn = ctk.CTkButton(actions_frame, text="⚙️ Admin Panel", width=120, height=30,
-                                            fg_color="#1565C0", command=self.open_admin_panel)
-            self.admin_btn.pack(side="left", padx=5)
+            self.admin_btn = ctk.CTkButton(info_frame, text="⚙️ Admin Panel", width=110, height=26,
+                                            fg_color="#1565C0", font=ctk.CTkFont(size=11),
+                                            command=self.open_admin_panel)
+            self.admin_btn.pack(side="left", padx=(15, 5))
+        
+        
+
+        
         
         # Disconnect button
-        disconnect_btn = ctk.CTkButton(top_bar, text="🔒 Déconnexion", width=140, height=30,
+        disconnect_btn = ctk.CTkButton(top_bar, text="🔒 Déconnexion", width=140, height=24,
                                         fg_color="#C62828", hover_color="#8E0000",
                                         font=ctk.CTkFont(size=12, weight="bold"),
                                         command=self._disconnect)
-        disconnect_btn.grid(row=0, column=2, padx=15, pady=8, sticky="e")
+        disconnect_btn.grid(row=0, column=2, padx=15, pady=2, sticky="e")
         
         self.scrollable_frame = ctk.CTkScrollableFrame(self)
         self.scrollable_frame.grid(row=1, column=0, sticky="nsew", padx=20, pady=(10, 20))
@@ -1392,7 +1535,8 @@ class App(ctk.CTkToplevel):
                 "piece_identite": self.piece_entry.get(),
                 "date": self.date_entry.get(),
                 "decompte": self.decompte_entry.get(),
-                "farmer": self.farmer_entry.get()
+                "farmer": self.farmer_entry.get(),
+                "user_account_name": self.username
             },
             "retenues": retenues_data,
             "totals": {
@@ -1430,23 +1574,11 @@ class App(ctk.CTkToplevel):
         if not self._compiled_data or not hasattr(self, '_temp_pdf_path'):
             return
             
-        farmer_name = self._compiled_data['identity']['farmer']
-        # Clean farmer name for filename
-        farmer_clean = "".join(x for x in farmer_name if x.isalnum() or x in " -_").strip()
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"facture_{farmer_clean}_{timestamp}.pdf"
-        output_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
-        
         try:
-            # Re-save/Move from temp to final destination
-            if os.path.exists(self._temp_pdf_path):
-                import shutil
-                shutil.move(self._temp_pdf_path, output_path)
+            # Save everything to the SQLite Database without saving final PDF to storage
+            database.save_invoice(self._compiled_data, "")
             
-            # 2. Save everything to the SQLite Database (The Silent Backup)
-            database.save_invoice(self._compiled_data, output_path)
-            
-            messagebox.showinfo("Success", f"Facture generated successfully!\nSaved to: {output_path}", parent=self)
+            messagebox.showinfo("Success", "Facture enregistrée dans la base de données !", parent=self)
             
             # Increment counter
             self.current_count += 1
@@ -1457,10 +1589,14 @@ class App(ctk.CTkToplevel):
             self.decompte_entry.insert(0, f"{self.current_count}/{year}")
             self.decompte_entry.configure(state="disabled")
             
-            # Optionally auto-open the PDF
-            os.startfile(output_path)
+            # Clean up the temp preview file immediately after saving
+            if hasattr(self, '_temp_pdf_path') and os.path.exists(self._temp_pdf_path):
+                try:
+                    os.remove(self._temp_pdf_path)
+                except:
+                    pass # File might be locked, will be overwritten next time anyway
         except Exception as e:
-            messagebox.showerror("Error", f"Could not generate PDF.\n{e}", parent=self)
+            messagebox.showerror("Error", f"Erreur de finalisation.\n{e}", parent=self)
 
 class LoginWindow(ctk.CTk):
     def __init__(self):

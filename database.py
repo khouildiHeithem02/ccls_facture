@@ -60,6 +60,18 @@ def init_db():
         )
     ''')
     
+    # Product Receipts table (links to products)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS product_receipts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_id INTEGER,
+            receipt_ref TEXT,
+            receipt_date TEXT,
+            quantity REAL,
+            FOREIGN KEY (product_id) REFERENCES products (id)
+        )
+    ''')
+    
     # Retenues/Taxes table (links to invoices)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS retenues (
@@ -201,6 +213,21 @@ def save_invoice(data, pdf_path):
                 p.get('montant_brut')
             ))
             
+            product_id = cursor.lastrowid
+            # 2b. Insert receipts for this product
+            receipts = p.get('receipts', [])
+            for r in receipts:
+                cursor.execute('''
+                    INSERT INTO product_receipts (
+                        product_id, receipt_ref, receipt_date, quantity
+                    ) VALUES (?, ?, ?, ?)
+                ''', (
+                    product_id,
+                    r.get('ref'),
+                    r.get('date'),
+                    r.get('qte')
+                ))
+            
         # 3. Insert all retenues for this invoice
         for r in retenues_list:
             # We only store if there was an amount or a name
@@ -291,15 +318,27 @@ def get_invoice_details(invoice_id):
         p_rows = cursor.fetchall()
         data["products"] = []
         for pr in p_rows:
-            data["products"].append({
+            prod_data = {
                 "nature": pr["nature"],
                 "quantite": pr["quantite"],
                 "prix_u": pr["prix_u"],
                 "montant_avant_tax": pr["quantite"] * pr["prix_u"], # derived
                 "bon": pr["bon"],
                 "refac": pr["refac"],
-                "montant_brut": pr["montant_brut"]
-            })
+                "montant_brut": pr["montant_brut"],
+                "receipts": []
+            }
+            
+            # Fetch receipts for this product
+            cursor.execute("SELECT * FROM product_receipts WHERE product_id = ?", (pr["id"],))
+            rr_rows = cursor.fetchall()
+            for rr in rr_rows:
+                prod_data["receipts"].append({
+                    "ref": rr["receipt_ref"],
+                    "date": rr["receipt_date"],
+                    "qte": rr["quantity"]
+                })
+            data["products"].append(prod_data)
             
         # 3. Fetch retenues
         cursor.execute("SELECT * FROM retenues WHERE invoice_id = ?", (invoice_id,))

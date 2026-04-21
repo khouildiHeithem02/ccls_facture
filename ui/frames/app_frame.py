@@ -9,6 +9,7 @@ import database
 from pdf_generator import generate_facture_pdf
 from ui.windows.admin_panel import AdminPanelWindow
 from ui.windows.preview_window import InvoicePreviewWindow
+from ui.windows.dialogs import ReceiptsDialog, PasswordDialog
 from config import TAXES_LIST
 
 class AppFrame(ctk.CTkFrame):
@@ -20,6 +21,7 @@ class AppFrame(ctk.CTkFrame):
         self.on_disconnect = on_disconnect
         self.on_show_history = on_show_history
         self.last_focused_input = None
+        self.current_receipts = [] # Track receipts for current product being entered
         
         # Load products and setup UI
         self.reload_products()
@@ -149,10 +151,10 @@ class AppFrame(ctk.CTkFrame):
         self.piece_entry.bind("<Return>", self._on_piece_enter)
         
         ctk.CTkLabel(id_frame, text="Vérifier le (Date)", font=ctk.CTkFont(family="Poppins", size=15)).grid(row=4, column=0, padx=10, pady=10, sticky="e")
-        self.date_entry = ctk.CTkEntry(id_frame, font=ctk.CTkFont(family="Poppins", size=15), height=35)
-        self.date_entry.insert(0, datetime.datetime.now().strftime("%d/%m/%Y"))
+        self.date_var = ctk.StringVar(value=datetime.datetime.now().strftime("%d/%m/%Y"))
+        self.date_var.trace_add("write", self._auto_format_invoice_date)
+        self.date_entry = ctk.CTkEntry(id_frame, font=ctk.CTkFont(family="Poppins", size=15), height=35, textvariable=self.date_var)
         self.date_entry.grid(row=4, column=1, padx=10, pady=10, sticky="w")
-        self.date_entry.configure(state="disabled")
         
         ctk.CTkLabel(id_frame, text="Decompte N°", font=ctk.CTkFont(family="Poppins", size=15)).grid(row=4, column=2, padx=10, pady=10, sticky="e")
         self.decompte_entry = ctk.CTkEntry(id_frame, font=ctk.CTkFont(family="Poppins", size=15), height=35)
@@ -195,10 +197,15 @@ class AppFrame(ctk.CTkFrame):
         self.nature_menu.bind("<Return>", self._on_nature_enter)
         
         tk.Label(prod_frame, text="Quantité", font=("Poppins", 11), bg="#dbdbdb", fg="black").grid(row=1, column=2, padx=10, pady=10, sticky="e")
-        self.quantite_entry = ctk.CTkEntry(prod_frame, state="disabled", font=ctk.CTkFont(family="Poppins", size=16), height=35)
-        self.quantite_entry.grid(row=1, column=3, padx=10, pady=10, sticky="w")
-        self.quantite_entry.bind("<Return>", self._on_qty_enter)
-        self.quantite_entry.bind("<Control-Return>", lambda e: self._on_qty_enter(e, jump_to_taxes=True))
+        qty_subframe = tk.Frame(prod_frame, bg="#dbdbdb")
+        qty_subframe.grid(row=1, column=3, padx=10, pady=10, sticky="w")
+        
+        self.quantite_entry = ctk.CTkEntry(qty_subframe, state="readonly", font=ctk.CTkFont(family="Poppins", size=16), height=35, width=100)
+        self.quantite_entry.pack(side="left")
+        
+        self.manage_receipts_btn = ctk.CTkButton(qty_subframe, text="📦 Bons", width=60, height=35, state="disabled", 
+                                                 command=self.open_receipts_dialog, fg_color="#FBC02D", text_color="black")
+        self.manage_receipts_btn.pack(side="left", padx=5)
         
         tk.Label(prod_frame, text="Bonification", font=("Poppins", 11), bg="#dbdbdb", fg="black").grid(row=2, column=0, padx=10, pady=10, sticky="e")
         self.bon_entry = ctk.CTkEntry(prod_frame, state="disabled", font=ctk.CTkFont(family="Poppins", size=16), height=35)
@@ -217,13 +224,7 @@ class AppFrame(ctk.CTkFrame):
             e.bind("<FocusIn>", lambda event, entry=e: self._set_last_focused(entry))
         
         self.added_products = []
-        self.add_prod_btn = ctk.CTkButton(prod_frame, text="Ajouter le produit", command=self.add_product, 
-                                          state="disabled", font=ctk.CTkFont(family="Poppins", size=14, weight="bold"), height=40)
-        self.add_prod_btn.grid(row=3, column=0, pady=15, padx=10)
-        
-        self.clear_prod_btn = ctk.CTkButton(prod_frame, text="Vider la liste", command=self.clear_products, 
-                                            fg_color="#C62828", state="disabled", font=ctk.CTkFont(family="Poppins", size=14), height=40)
-        self.clear_prod_btn.grid(row=3, column=1, pady=15, padx=10)
+        # Buttons removed: Finalization is now automated by keyboard (Enter on Réfaction)
         
         self.prod_count_lbl = ctk.CTkLabel(prod_frame, text=f"Produits: 0 / {self.max_products}", 
                                            font=ctk.CTkFont(family="Poppins", size=15, weight="bold"))
@@ -357,7 +358,7 @@ class AppFrame(ctk.CTkFrame):
     def confirm_taxes(self):
         if self.calculate():
             for e in [self.quantite_entry, self.bon_entry, self.refac_entry]: e.configure(state="disabled")
-            self.nature_menu.configure(state="disabled"); self.add_prod_btn.configure(state="disabled")
+            self.nature_menu.configure(state="disabled")
             for tax in self.tax_inputs: 
                 tax["nbre"].configure(state="disabled"); tax["pu"].configure(state="disabled"); tax["amount"].configure(state="disabled")
             self.tax_done_btn.configure(state="disabled", text="Confirmed & Locked")
@@ -370,6 +371,15 @@ class AppFrame(ctk.CTkFrame):
     def _on_nif_key(self, e=None): self.nif_entry.configure(border_color="red" if self.nif_entry.get().strip() and len(self.nif_entry.get().strip()) != 20 else ["#979797", "#3d3d3d"])
     def _on_piece_key(self, e=None): self.piece_entry.configure(border_color="red" if len(self.piece_entry.get().strip()) != 9 else ["#979797", "#3d3d3d"])
 
+    def _auto_format_invoice_date(self, *args):
+        val = self.date_var.get().replace("/", "")
+        if len(val) > 8: val = val[:8]
+        formatted = ""
+        if len(val) >= 1: formatted += val[:2]
+        if len(val) >= 3: formatted += "/" + val[2:4]
+        if len(val) >= 5: formatted += "/" + val[4:8]
+        if self.date_var.get() != formatted: self.date_var.set(formatted)
+
     def safe_float(self, v):
         try:
             v = v.replace(',', '.')
@@ -377,10 +387,10 @@ class AppFrame(ctk.CTkFrame):
         except: return 0.0
 
     def _on_nature_choice(self, c): 
-        if c and c.strip(): self.quantite_entry.focus()
+        if c and c.strip(): self.open_receipts_dialog()
     def _on_nature_enter(self, e=None): 
         c = self.nature_var.get()
-        if c and c.strip(): self.quantite_entry.focus()
+        if c and c.strip(): self.open_receipts_dialog()
         else: messagebox.showwarning("Précision", "Veuillez sélectionner un produit."); self.nature_menu.focus()
 
     def _on_farmer_enter(self, e=None):
@@ -399,12 +409,18 @@ class AppFrame(ctk.CTkFrame):
         else: messagebox.showwarning("Validation", "NIF incorrect (20 chiffres)."); self.nif_entry.focus()
     def _on_piece_enter(self, e=None):
         if len(self.piece_entry.get().strip()) == 9:
-            res = messagebox.askyesno("Calcul de Facture", "Plusieurs produits ?", parent=self)
-            self.multi_prod_var.set(res)
-            for e in [self.nature_menu, self.quantite_entry, self.bon_entry, self.refac_entry, self.add_prod_btn, self.clear_prod_btn]: e.configure(state="normal")
+            # Removed popup: automatically entering product entry mode
+            self.multi_prod_var.set(True)
+            for entry in [self.nature_menu, self.manage_receipts_btn, self.bon_entry, self.refac_entry]: entry.configure(state="normal")
+            self.quantite_entry.configure(state="readonly")
             self.nature_menu.focus()
             self.nature_menu._clicked() # Auto-dropdown
         else: messagebox.showwarning("Validation", "Pièce identité incorrecte (9 chiffres)."); self.piece_entry.focus()
+
+    def _on_nature_enter(self, e=None):
+        """Keyboard Enter on Nature select -> Open Receipts Dialog"""
+        if self.nature_var.get().strip():
+             self.open_receipts_dialog()
 
     def _on_qty_enter(self, e=None, jump_to_taxes=False):
         if jump_to_taxes: self._on_refac_enter(jump_to_taxes=True); return
@@ -414,31 +430,44 @@ class AppFrame(ctk.CTkFrame):
         if jump_to_taxes: self._on_refac_enter(jump_to_taxes=True); return
         self.refac_entry.focus()
     def _on_refac_enter(self, e=None, jump_to_taxes=False):
-        if not self.bon_entry.get().strip() and not self.refac_entry.get().strip():
-             messagebox.showwarning("Précision", "Saisir bonification ou réfaction."); self.bon_entry.focus()
-        else: self.add_product(jump_to_taxes=jump_to_taxes)
+        # Auto-add product when hitting Enter on the last entry field (Refac)
+        self.add_product(jump_to_taxes=jump_to_taxes)
 
     def add_product(self, jump_to_taxes=False):
         if len(self.added_products) >= 5: messagebox.showwarning("Limite", "Max 5 produits."); return
         nature = self.nature_var.get()
         if not nature or nature.strip() == "": messagebox.showwarning("Validation", "Select Nature."); return
         prix_u = self.products.get(nature, 0)
+        
+        # Pull Qty from entry (which is now filled by the dialog)
         qte = self.safe_float(self.quantite_entry.get())
-        if qte <= 0: messagebox.showwarning("Validation", "Quantité > 0."); return
+        if qte <= 0: messagebox.showwarning("Validation", "Veuillez ajouter des Bons de Réception."); self.open_receipts_dialog(); return
+        
         bon, refac = self.safe_float(self.bon_entry.get()), self.safe_float(self.refac_entry.get())
         if bon <= 0 and refac <= 0: messagebox.showwarning("Validation", "Bon ou Refac requis."); return
         
-        m_brut = (qte * prix_u) + (qte * bon) - (qte * refac)
-        self.added_products.append({"nature": nature, "quantite": qte, "prix_u": prix_u, "bon": bon, "refac": refac, "montant_brut": m_brut})
+        product_item = {
+            "nature": nature, 
+            "quantite": qte, 
+            "prix_u": prix_u, 
+            "bon": bon, 
+            "refac": refac, 
+            "montant_brut": (qte * prix_u) + (qte * bon) - (qte * refac),
+            "receipts": list(self.current_receipts)
+        }
+        self.added_products.append(product_item)
+        self._refresh_product_list_ui()
         
-        row = ctk.CTkFrame(self.prod_listbox, fg_color="gray25", corner_radius=6)
-        row.pack(fill="x", padx=2, pady=2)
-        ctk.CTkLabel(row, text=f"📦 {nature} | Qte: {qte} | {m_brut:,.2f} DA", anchor="w", font=ctk.CTkFont(size=11)).pack(fill="x", padx=10, pady=3)
+        # Reset current shipment state
+        self.current_receipts = []
         
         # Lock Identity after first product
         for e in [self.farmer_entry, self.remis_entry, self.nif_entry, self.piece_entry]: e.configure(state="disabled")
         
-        self.quantite_entry.delete(0, 'end'); self.bon_entry.delete(0, 'end'); self.refac_entry.delete(0, 'end')
+        self.quantite_entry.configure(state="normal")
+        self.quantite_entry.delete(0, 'end')
+        self.quantite_entry.configure(state="readonly")
+        self.bon_entry.delete(0, 'end'); self.refac_entry.delete(0, 'end')
         self.prod_count_lbl.configure(text=f"Produits: {len(self.added_products)} / {self.max_products}")
         self.to_taxes_btn.configure(state="normal")
         self.calculate()
@@ -452,23 +481,34 @@ class AppFrame(ctk.CTkFrame):
             self.nature_menu._clicked() # Auto-dropdown
 
     def _go_to_taxes(self):
-        self.add_prod_btn.configure(state="disabled")
         for tax in self.tax_inputs:
             if tax["name"] == "redevance CH AGP": tax["amount"].focus(); break
 
     def clear_products(self, focus_nature=True):
         self.added_products = []
-        for w in self.prod_listbox.winfo_children(): w.destroy()
+        self.current_receipts = []
+        self._refresh_product_list_ui()
         self.prod_count_lbl.configure(text=f"Produits: 0 / {self.max_products}")
-        self.add_prod_btn.configure(state="normal"); self.to_taxes_btn.configure(state="disabled")
+        self.to_taxes_btn.configure(state="disabled")
         if focus_nature: self.nature_menu.focus()
         self.calculate()
+
+    def remove_product(self, index):
+        """Removes a specific product from the list and refreshes UI."""
+        if 0 <= index < len(self.added_products):
+            self.added_products.pop(index)
+            self._refresh_product_list_ui()
+            self.prod_count_lbl.configure(text=f"Produits: {len(self.added_products)} / {self.max_products}")
+            if not self.added_products:
+                self.to_taxes_btn.configure(state="disabled")
+            self.calculate()
 
     def clear_all(self):
         for e in [self.farmer_entry, self.remis_entry, self.nif_entry, self.piece_entry]: 
             e.configure(state="normal"); e.delete(0, 'end')
         self.wilaya_var.set(" ")
         self.clear_products()
+        self.current_receipts = []
         self.res_lbl.configure(text="Totals will be calculated automatically.")
         self.farmer_entry.focus()
 
@@ -539,3 +579,69 @@ class AppFrame(ctk.CTkFrame):
         messagebox.showinfo("Success", "Facture enregistrée !")
         self.current_count += 1; self.save_count(self.current_count)
         self.clear_all()
+
+    def open_receipts_dialog(self, product_idx=None):
+        """Opens the receipts manager. If index provided, edits existing product's receipts."""
+        initial = []
+        if product_idx is not None:
+            initial = self.added_products[product_idx].get('receipts', [])
+        else:
+            initial = self.current_receipts
+
+        def on_save(new_receipts):
+            total_qty = sum(r['qte'] for r in new_receipts)
+            if product_idx is not None:
+                # Update existing product
+                prod = self.added_products[product_idx]
+                prod['receipts'] = [dict(r) for r in new_receipts]
+                prod['quantite'] = total_qty
+                # Recalculate brut
+                prod['montant_brut'] = (total_qty * prod['prix_u']) + (total_qty * prod['bon']) - (total_qty * prod['refac'])
+                self._refresh_product_list_ui()
+                self.calculate()
+            else:
+                # Update current entry
+                self.current_receipts = [dict(r) for r in new_receipts]
+                self.quantite_entry.configure(state="normal")
+                self.quantite_entry.delete(0, 'end')
+                self.quantite_entry.insert(0, f"{total_qty:.2f}")
+                self.quantite_entry.configure(state="readonly")
+                # Automated flow: move focus to Bonification for next step
+                self.bon_entry.focus()
+
+        ReceiptsDialog(self, initial_receipts=initial, on_save=on_save)
+
+    def _refresh_product_list_ui(self):
+        """Re-renders the scrollable list of added products with Edit buttons."""
+        for widget in self.prod_listbox.winfo_children():
+            widget.destroy()
+
+        for i, p in enumerate(self.added_products):
+            # High-contrast design for better readability
+            row = ctk.CTkFrame(self.prod_listbox, fg_color="#ffffff", border_width=1, border_color="#dddddd", corner_radius=8)
+            row.pack(fill="x", padx=5, pady=4)
+            
+            # Product info - Show Bon numbers for clarity
+            bons_list = [r['ref'] for r in p.get('receipts', [])]
+            bons_str = ", ".join(bons_list)
+            info_text = f"📦 {p['nature']} | Qté: {p['quantite']:.2f} | {p['montant_brut']:,.2f} DA"
+            if bons_str:
+                info_text += f"\n📄 Bons: {bons_str}"
+
+            ctk.CTkLabel(row, text=info_text, 
+                          anchor="w", font=ctk.CTkFont(family="Poppins", size=12, weight="bold"), 
+                          text_color="#212121", justify="left").pack(side="left", fill="x", expand=True, padx=15, pady=8)
+            
+            # Action Buttons Area
+            actions = ctk.CTkFrame(row, fg_color="transparent")
+            actions.pack(side="right", padx=10)
+            
+            # Edit Button for receipts
+            ctk.CTkButton(actions, text="📝 BONS", width=70, height=30, font=ctk.CTkFont(family="Poppins", size=11, weight="bold"),
+                          fg_color="#1565C0", hover_color="#0D47A1",
+                          command=lambda idx=i: self.open_receipts_dialog(idx)).pack(side="left", padx=5)
+            
+            # Delete Button (Red X)
+            ctk.CTkButton(actions, text="✕", width=30, height=30, font=ctk.CTkFont(size=14, weight="bold"),
+                          fg_color="#C62828", hover_color="#B71C1C", text_color="white",
+                          command=lambda idx=i: self.remove_product(idx)).pack(side="left", padx=5)

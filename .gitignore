@@ -1,24 +1,22 @@
 # Python
 __pycache__/
-*.py[cod]
-*$py.class
+*.pyc
+*.pyo
+*.pyd
 venv/
+env/
 .env
 
 # Database
 *.db
 *.sqlite3
 
-# Generated PDF files
+# Generated PDFs
 *.pdf
 
 # Local state
 counter.txt
 
-# OS specifics
+# OS specific
 .DS_Store
 Thumbs.db
-
-# IDEs
-.vscode/
-.idea/

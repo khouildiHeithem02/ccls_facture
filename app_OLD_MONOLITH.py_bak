@@ -1,0 +1,1761 @@
+import customtkinter as ctk
+import os
+import datetime
+import fitz  # PyMuPDF
+import ctypes
+from PIL import Image
+from tkinter import messagebox
+from pdf_generator import generate_facture_pdf, generate_accumulation_pdf
+import database
+
+ctk.set_appearance_mode("light")
+ctk.set_default_color_theme("blue")
+
+
+
+TAXES_LIST = [
+    "taxe pour compte CNA",
+    "taxe pour chambre agricole",
+    "redevance CH AGP",
+    "sacherie",
+    "Credit semence",
+    "Credit engrais",
+    "Fongicide",
+    "Kit aspersion/Oniouleur",
+    "pivot",
+    "Préstation Motoculture"
+]
+
+class InvoicePreviewWindow(ctk.CTkToplevel):
+    def __init__(self, parent, pdf_path, on_confirm=None, mode="creation"):
+        super().__init__(parent)
+        self.title("Invoice Preview (Exact Layout)")
+        
+        # Center horizontally, but pull to top horizontally so bottom buttons aren't cut off
+        w = 850
+        h = 700
+        try:
+            x = (self.winfo_screenwidth() // 2) - (w // 2)
+            self.geometry(f"{w}x{h}+{max(0, x)}+30")
+        except:
+            self.geometry(f"{w}x{h}")
+            
+        self.resizable(True, True)
+        self.lift()
+        self.on_confirm = on_confirm
+        self.pdf_path = pdf_path
+        self.mode = mode
+        
+        # Hook the 'X' button to delete the preview file too
+        self.protocol("WM_DELETE_WINDOW", self.on_cancel)
+        
+        # Make top level modal
+        self.grab_set()
+        
+        # Prevent screenshots specifically for the preview
+        self.after(100, lambda: self._apply_protection())
+
+        main_frame = ctk.CTkFrame(self)
+        main_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        # --- ACTION BUTTONS (Pack these FIRST at the bottom) ---
+        btn_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        btn_frame.pack(side="bottom", fill="x", pady=10)
+        
+        if self.mode == "creation":
+            self.btn_print = ctk.CTkButton(btn_frame, text="🖨️ Imprimer & Enregistrer", command=self.confirm_and_close,
+                                           fg_color="green", font=ctk.CTkFont(family="Poppins", size=15, weight="bold"), height=45)
+            self.btn_print.pack(side="left", expand=True, padx=10)
+            
+            self.btn_cancel = ctk.CTkButton(btn_frame, text="❌ CANCEL", command=self.on_cancel,
+                                            fg_color="#C62828", font=ctk.CTkFont(family="Poppins", size=15), height=45)
+            self.btn_cancel.pack(side="right", expand=True, padx=10)
+        else:
+            # View-only / History mode
+            self.btn_print = ctk.CTkButton(btn_frame, text="🖨️ PRINT / OPEN FILE", command=lambda: os.startfile(self.pdf_path),
+                                           fg_color="#1976D2", font=ctk.CTkFont(family="Poppins", size=15, weight="bold"), height=45)
+            self.btn_print.pack(side="left", expand=True, padx=10)
+            
+            self.btn_close = ctk.CTkButton(btn_frame, text="Fermer", command=self.on_cancel,
+                                           fg_color="gray", font=ctk.CTkFont(family="Poppins", size=15), height=45)
+            self.btn_close.pack(side="right", expand=True, padx=10)
+
+        # Scrollable area for the image (Takes remaining space)
+        self.scroll_canvas = ctk.CTkScrollableFrame(main_frame, fg_color="#f0f0f0")
+        self.scroll_canvas.pack(side="top", fill="both", expand=True, pady=(0, 10))
+        
+        # Render the PDF to an image
+        try:
+            doc = fitz.open(pdf_path)
+            page = doc.load_page(0)  # Load first page
+            
+            # Increase resolution for sharpness (zoom=2.0)
+            zoom = 2.0
+            mat = fitz.Matrix(zoom, zoom)
+            pix = page.get_pixmap(matrix=mat)
+            
+            # Convert pixmap to PIL Image
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            
+            # Convert to CTkImage
+            self.preview_image = ctk.CTkImage(light_image=img, dark_image=img, size=(pix.width//2.5, pix.height//2.5))
+            
+            # Display image centered
+            self.image_label = ctk.CTkLabel(self.scroll_canvas, image=self.preview_image, text="")
+            self.image_label.pack(expand=True, padx=20, pady=20)
+            doc.close()
+        except Exception as e:
+            ctk.CTkLabel(self.scroll_canvas, text=f"Error rendering preview: {e}").pack(pady=50)
+        
+    def on_cancel(self):
+        try:
+            # Delete the temp file (always for view, and if cancelled for creation)
+            if os.path.exists(self.pdf_path):
+                os.remove(self.pdf_path)
+        except:
+            pass
+        self.destroy()
+
+    def _apply_protection(self):
+        """Internal helper for Windows screenshot protection."""
+        try:
+            hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
+            # WDA_EXCLUDEFROMCAPTURE = 0x11 (Windows 10 2004+)
+            ctypes.windll.user32.SetWindowDisplayAffinity(hwnd, 0x11)
+        except:
+            pass
+
+    def confirm_and_close(self):
+        self.destroy()
+        if self.on_confirm:
+            self.on_confirm()
+
+class PasswordDialog(ctk.CTkToplevel):
+    def __init__(self, parent, title="Mot de passe requis", on_success=None):
+        super().__init__(parent)
+        self.title(title)
+        self.geometry("300x170")
+        self.resizable(False, False)
+        self.attributes("-topmost", True)
+        self.grab_set()
+        
+        self.on_success = on_success
+        self.parent_app = parent.master # App is the master of HistoryWindow
+        
+        ctk.CTkLabel(self, text="Entrez votre mot de passe\npour confirmer l'action:", 
+                     font=ctk.CTkFont(family="Poppins", size=14, weight="bold")).pack(pady=(20, 10))
+        self.pw_entry = ctk.CTkEntry(self, show="*", width=220, height=35, font=ctk.CTkFont(family="Poppins", size=15))
+        self.pw_entry.pack(pady=10)
+        self.pw_entry.focus()
+        self.pw_entry.bind("<Return>", lambda e: self.verify())
+        
+        ctk.CTkButton(self, text="Confirmer", command=self.verify, height=40, font=ctk.CTkFont(family="Poppins", size=14, weight="bold"),
+                      fg_color="#FBC02D", text_color="black").pack(pady=10)
+        
+    def verify(self):
+        pw = self.pw_entry.get()
+        username = self.parent_app.username
+        success, _ = database.verify_login(username, pw)
+        if success:
+            if self.on_success:
+                self.on_success()
+            self.destroy()
+        else:
+            messagebox.showerror("Erreur", "Mot de passe incorrect.", parent=self)
+
+
+class HistoryFrame(ctk.CTkFrame):
+    def __init__(self, master, username, on_back=None):
+        super().__init__(master, fg_color="transparent")
+        self.username = username
+        self.on_back = on_back
+        
+        # Identity Search
+        filter_frame = ctk.CTkFrame(self)
+        filter_frame.pack(fill="x", padx=20, pady=20)
+        
+        # BACK BUTTON
+        btn_back = ctk.CTkButton(filter_frame, text="⬅ Retour", width=100, command=self._go_back, fg_color="#607D8B")
+        btn_back.pack(side="left", padx=(0, 20))
+        
+        # Prevent screenshots for history too
+        try:
+            hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
+            ctypes.windll.user32.SetWindowDisplayAffinity(hwnd, 0x11)
+        except:
+            pass
+
+        # Search area
+        search_frame = ctk.CTkFrame(self)
+        # Filter Bar (Horizontal)
+        filter_frame = ctk.CTkFrame(self)
+        filter_frame.pack(fill="x", padx=20, pady=20)
+        
+        # Identity Search
+        ctk.CTkLabel(filter_frame, text="Recherche Nom/NIF:", font=ctk.CTkFont(family="Poppins", size=15)).pack(side="left", padx=5)
+        self.search_entry = ctk.CTkEntry(filter_frame, placeholder_text="Mecheni...", width=250, height=35, font=ctk.CTkFont(family="Poppins", size=15))
+        self.search_entry.pack(side="left", padx=5)
+        self.search_entry.bind("<KeyRelease>", lambda e: self.refresh_list())
+        self.search_entry.bind("<Return>", lambda e: self.refresh_list())
+        
+        # Wilaya Filter
+        ctk.CTkLabel(filter_frame, text="Wilaya:", font=ctk.CTkFont(family="Poppins", size=15)).pack(side="left", padx=5)
+        self.wilaya_var = ctk.StringVar(value="Tous")
+        self.wilaya_menu = ctk.CTkOptionMenu(filter_frame, values=["Tous", "Ouargla", "Tougourt", "Ilizi"], 
+                                             variable=self.wilaya_var, command=lambda _: self.refresh_list(), 
+                                             width=140, height=35, font=ctk.CTkFont(family="Poppins", size=14))
+        self.wilaya_menu.pack(side="left", padx=5)
+        
+        # Product Filter
+        ctk.CTkLabel(filter_frame, text="Produit:", font=ctk.CTkFont(family="Poppins", size=15)).pack(side="left", padx=5)
+        all_prods = database.get_db_products()
+        product_list = ["Tous"] + list(all_prods.keys())
+        self.product_var = ctk.StringVar(value="Tous")
+        self.product_menu = ctk.CTkOptionMenu(filter_frame, values=product_list, 
+                                              variable=self.product_var, command=lambda _: self.refresh_list(), 
+                                              width=160, height=35, font=ctk.CTkFont(family="Poppins", size=14))
+        self.product_menu.pack(side="left", padx=5)
+        
+        # Status Filter
+        ctk.CTkLabel(filter_frame, text="Statut:", font=ctk.CTkFont(family="Poppins", size=15)).pack(side="left", padx=5)
+        self.status_var = ctk.StringVar(value="Tous")
+        self.status_menu = ctk.CTkOptionMenu(filter_frame, values=["Tous", "Payé", "Non Payé"], 
+                                              variable=self.status_var, command=lambda _: self.refresh_list(), 
+                                              width=120, height=35, font=ctk.CTkFont(family="Poppins", size=14))
+        self.status_menu.pack(side="left", padx=5)
+        
+        btn_refresh = ctk.CTkButton(filter_frame, text="🔄 Actualiser", width=120, height=35, 
+                                    command=self.refresh_list, fg_color="#37474F", font=ctk.CTkFont(family="Poppins", size=14))
+        btn_refresh.pack(side="right", padx=5)
+        
+        # Header for the list
+        header_frame = ctk.CTkFrame(self, fg_color="#e9ecef")
+        header_frame.pack(fill="x", padx=20, pady=0)
+        h_font = ctk.CTkFont(family="Poppins", size=15, weight="bold")
+        ctk.CTkLabel(header_frame, text="Facture #", width=120, font=h_font).grid(row=0, column=0, padx=5)
+        ctk.CTkLabel(header_frame, text="Date", width=120, font=h_font).grid(row=0, column=1, padx=5)
+        ctk.CTkLabel(header_frame, text="Agriculteur", width=300, font=h_font).grid(row=0, column=2, padx=5)
+        ctk.CTkLabel(header_frame, text="Montant Net", width=150, font=h_font).grid(row=0, column=3, padx=5)
+        ctk.CTkLabel(header_frame, text="Statut", width=120, font=h_font).grid(row=0, column=4, padx=5)
+        ctk.CTkLabel(header_frame, text="Actions", width=180, font=h_font).grid(row=0, column=5, padx=5)
+        
+        # Scrollable list
+        self.list_frame = ctk.CTkScrollableFrame(self)
+        self.list_frame.pack(fill="both", expand=True, padx=20, pady=(10, 0))
+        
+        # Accumulate area (Bottom)
+        self.accum_frame = ctk.CTkFrame(self, fg_color="#f8f9fa")
+        self.accum_frame.pack(fill="x", padx=20, pady=10)
+        
+        self.btn_accum = ctk.CTkButton(self.accum_frame, text="📊 Accumulate Totals", 
+                                       command=self.accumulate_totals, height=45,
+                                       fg_color="#FBC02D", text_color="black", font=ctk.CTkFont(family="Poppins", size=16, weight="bold"))
+        self.btn_accum.pack(side="left", padx=20, pady=15)
+        
+        self.totals_label = ctk.CTkLabel(self.accum_frame, text="Cliquer pour calculer les totaux de la liste.", 
+                                         font=ctk.CTkFont(family="Poppins", size=15), justify="left")
+        self.totals_label.pack(side="left", padx=20)
+
+        # Status Bar / Tooltip area
+        self.status_bar = ctk.CTkLabel(self, text="Survoler un bouton pour voir son action...", 
+                                       font=ctk.CTkFont(family="Poppins", size=14, slant="italic"), text_color="gray")
+        self.status_bar.pack(pady=10)
+        
+        self.refresh_list()
+
+    def _go_back(self):
+        if self.on_back:
+            self.on_back()
+
+    def _set_status(self, text):
+        self.status_bar.configure(text=text, text_color="white")
+
+    def _clear_status(self, _=None):
+        self.status_bar.configure(text="Survoler un bouton pour voir son action...", text_color="gray")
+
+    def accumulate_totals(self):
+        """Fetches grouped aggregate data and displays it in a professional table popup."""
+        query = self.search_entry.get().strip()
+        wilaya = self.wilaya_var.get()
+        product = self.product_var.get()
+        status = self.status_var.get()
+        
+        # Get per-product rows
+        data_grouped = database.get_grouped_accumulation(query if query else None, wilaya, product, status)
+        # Get overall invoice-level totals
+        grand_totals = database.get_filtered_totals(query if query else None, wilaya, product, status)
+        
+        if not data_grouped:
+            messagebox.showinfo("Information", "Aucune donnée à accumuler pour ces filtres.", parent=self)
+            return
+            
+        AccumulationWindow(self, data_grouped, grand_totals)
+
+    def refresh_list(self):
+        # Clear existing
+        for widget in self.list_frame.winfo_children():
+            widget.destroy()
+            
+        query = self.search_entry.get().strip()
+        wilaya = self.wilaya_var.get()
+        product = self.product_var.get()
+        status_filter = self.status_var.get()
+        
+        invoices = database.get_all_invoices(query if query else None, wilaya, product, status_filter)
+        
+        if not invoices:
+            ctk.CTkLabel(self.list_frame, text="Aucune facture trouvée.", 
+                         font=ctk.CTkFont(family="Poppins", size=16, slant="italic")).pack(pady=30)
+            return
+
+        for inv in invoices:
+            inv_id = inv["id"]
+            dec = inv["decompte"]
+            dt = inv["date"]
+            name = inv["farmer_name"]
+            net = inv["total_net"]
+            status_val = inv["payment_status"]
+            
+            row_frame = ctk.CTkFrame(self.list_frame, fg_color="white", border_width=1, border_color="#eeeeee")
+            row_frame.pack(fill="x", pady=4, padx=5)
+            
+            r_font = ctk.CTkFont(family="Poppins", size=14)
+            ctk.CTkLabel(row_frame, text=dec, width=120, font=r_font).grid(row=0, column=0, padx=5)
+            ctk.CTkLabel(row_frame, text=dt, width=120, font=r_font).grid(row=0, column=1, padx=5)
+            ctk.CTkLabel(row_frame, text=name, width=300, anchor="w", font=r_font).grid(row=0, column=2, padx=5)
+            ctk.CTkLabel(row_frame, text=f"{net:,.2f} DA", width=150, text_color="#2E7D32", font=ctk.CTkFont(family="Poppins", size=14, weight="bold")).grid(row=0, column=3, padx=5)
+            
+            status_color = "#2E7D32" if status_val == "Payé" else "#C62828"
+            display_stat = f"🟢 {status_val}" if status_val == "Payé" else f"🔴 {status_val}"
+            status_lbl = ctk.CTkLabel(row_frame, text=display_stat, width=120, text_color=status_color, font=r_font)
+            status_lbl.grid(row=0, column=4, padx=5)
+            
+            actions_frame = ctk.CTkFrame(row_frame, fg_color="transparent")
+            actions_frame.grid(row=0, column=5, padx=5)
+            
+            # View Button (Generates from DB temp)
+            btn_view = ctk.CTkButton(actions_frame, text="👁️ Voir", width=80, height=32, 
+                                     font=ctk.CTkFont(family="Poppins", size=13),
+                                     command=lambda i_id=inv_id: self.view_pdf(i_id))
+            btn_view.pack(side="left", padx=5)
+            btn_view.bind("<Enter>", lambda e: self._set_status("👁️ Recréer et voir la facture."))
+            btn_view.bind("<Leave>", self._clear_status)
+            
+            # Toggle Status Button
+            toggle_text = "💳 Payer" if status_val != "Payé" else "❌ Annuler"
+            toggle_color = "#1976D2" if status_val != "Payé" else "#757575"
+            btn_toggle = ctk.CTkButton(actions_frame, text=toggle_text, width=80, height=32, 
+                                       fg_color=toggle_color, font=ctk.CTkFont(family="Poppins", size=13))
+            btn_toggle.configure(command=lambda i_id=inv_id, s_lbl=status_lbl, btn=btn_toggle: self.toggle_status(i_id, s_lbl, btn))
+            btn_toggle.pack(side="left", padx=5)
+
+    def toggle_status(self, inv_id, status_lbl, btn_toggle):
+        current_text = status_lbl.cget("text")
+        is_paid = "🟢 Payé" in current_text
+        current_status = "Payé" if is_paid else "Non Payé"
+        
+        def do_toggle():
+            new_status = "Payé" if current_status != "Payé" else "Non Payé"
+            if database.update_payment_status(inv_id, new_status):
+                # Update widgets in place! No full reload lag!
+                new_color = "#4CAF50" if new_status == "Payé" else "#F44336"
+                new_display = f"🟢 {new_status}" if new_status == "Payé" else f"🔴 {new_status}"
+                status_lbl.configure(text=new_display, text_color=new_color)
+                
+                toggle_text = "💳 Payer" if new_status != "Payé" else "❌ Annuler"
+                toggle_color = "#2196F3" if new_status != "Payé" else "#757575"
+                btn_toggle.configure(text=toggle_text, fg_color=toggle_color)
+                
+        PasswordDialog(self, title="Validation Requise", on_success=do_toggle)
+
+    def view_pdf(self, inv_id):
+        data = database.get_invoice_details(inv_id)
+        if data:
+            # Inject current user account name for print rendering
+            data['identity']['user_account_name'] = self.master.username
+            
+            # Use a static name to avoid generating multiple temp files on disk
+            filename = "temp_history_view.pdf"
+            output_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+            
+            try:
+                generate_facture_pdf(data, output_path)
+                # Open the internal previewer in view mode
+                InvoicePreviewWindow(self, output_path, mode="view")
+            except Exception as e:
+                messagebox.showerror("Erreur", f"Échec de l'aperçu: {e}", parent=self)
+        else:
+            messagebox.showerror("Erreur", "Données introuvables.", parent=self)
+
+class AccumulationWindow(ctk.CTkToplevel):
+    def __init__(self, parent, data, grand_totals):
+        super().__init__(parent)
+        self.title("Rapport Financier d'Accumulation")
+        self.geometry("1100x700") # Increased height for the button
+        self.attributes("-topmost", True)
+        
+        self.accum_data = data
+        self.grand_totals = grand_totals
+        self.parent_app = parent.master # App is the master of HistoryWindow
+        
+        # Screenshot protection
+        try:
+            from ctypes import windll
+            windll.user32.SetWindowDisplayAffinity(self.winfo_id(), 0x00000011)
+        except:
+            pass
+            
+        header_font = ctk.CTkFont(family="Poppins", size=15, weight="bold")
+        main_font = ctk.CTkFont(family="Poppins", size=14)
+        summary_font = ctk.CTkFont(family="Poppins", size=18, weight="bold")
+        
+        # Table Scrollable Frame
+        self.table_frame = ctk.CTkScrollableFrame(self)
+        self.table_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # Headers
+        headers = ["Nature du Produit", "Agriculteurs", "Qte Totale", "Avant Taxes", "Bonification", "Réfaction", "Montant Brut"]
+        for col, h in enumerate(headers):
+            ctk.CTkLabel(self.table_frame, text=h, font=header_font, width=160).grid(row=0, column=col, padx=8, pady=15)
+            
+        # Data Rows
+        row_idx = 1
+        for row in data:
+            ctk.CTkLabel(self.table_frame, text=row['nature'], font=main_font, width=160).grid(row=row_idx, column=0, padx=8, pady=8)
+            ctk.CTkLabel(self.table_frame, text=str(row['farmer_count']), font=main_font, width=160).grid(row=row_idx, column=1, padx=8, pady=8)
+            ctk.CTkLabel(self.table_frame, text=f"{row['qte']:,.2f}", font=main_font, width=160).grid(row=row_idx, column=2, padx=8, pady=8)
+            ctk.CTkLabel(self.table_frame, text=f"{row['avant']:,.2f}", font=main_font, width=160).grid(row=row_idx, column=3, padx=8, pady=8)
+            ctk.CTkLabel(self.table_frame, text=f"{row['bon']:,.2f}", font=main_font, width=160).grid(row=row_idx, column=4, padx=8, pady=8)
+            ctk.CTkLabel(self.table_frame, text=f"{row['refac']:,.2f}", font=main_font, width=160).grid(row=row_idx, column=5, padx=8, pady=8)
+            ctk.CTkLabel(self.table_frame, text=f"{row['net_prod']:,.2f}", font=main_font, width=160).grid(row=row_idx, column=6, padx=8, pady=8)
+            row_idx += 1
+            
+        # --- SUMMARY ROWS (Integrated into the same table) ---
+        
+        # 1. Spacer/Divider Line
+        ctk.CTkFrame(self.table_frame, height=2, fg_color="gray").grid(row=row_idx, column=0, columnspan=7, sticky="ew", pady=10)
+        row_idx += 1
+        
+        # 2. TOTAL GÉNÉRAL (Sum of columns)
+        ctk.CTkLabel(self.table_frame, text="TOTAL GÉNÉRAL", font=header_font).grid(row=row_idx, column=0, padx=5, pady=5)
+        # Count all unique farmers (We can sum them from the grouped data for simplicity in this view)
+        total_farmers = sum(r['farmer_count'] for r in data)
+        ctk.CTkLabel(self.table_frame, text=str(total_farmers), font=header_font).grid(row=row_idx, column=1, padx=5, pady=5)
+        ctk.CTkLabel(self.table_frame, text=f"{grand_totals['total_avant'] / 6000 if grand_totals['total_avant'] > 0 else 0:,.2f}?", font=header_font).grid_forget() # Placeholder logic removed
+        
+        # Summing the rest from grand_totals
+        ctk.CTkLabel(self.table_frame, text=f"{sum(r['qte'] for r in data):,.2f}", font=header_font).grid(row=row_idx, column=2, padx=5, pady=5)
+        ctk.CTkLabel(self.table_frame, text=f"{grand_totals['total_avant']:,.2f}", font=header_font).grid(row=row_idx, column=3, padx=5, pady=5)
+        ctk.CTkLabel(self.table_frame, text=f"{grand_totals['total_bon']:,.2f}", font=header_font).grid(row=row_idx, column=4, padx=5, pady=5)
+        ctk.CTkLabel(self.table_frame, text=f"{grand_totals['total_refac']:,.2f}", font=header_font).grid(row=row_idx, column=5, padx=5, pady=5)
+        ctk.CTkLabel(self.table_frame, text=f"{grand_totals['total_avant'] + grand_totals['total_bon'] - grand_totals['total_refac']:,.2f}", font=header_font).grid(row=row_idx, column=6, padx=5, pady=5)
+        row_idx += 1
+        
+        # 3. TOTAL RETENUES
+        ctk.CTkLabel(self.table_frame, text="TOTAL RETENUES (TAXES)", font=header_font, text_color="#E64A19").grid(row=row_idx, column=0, columnspan=6, sticky="e", padx=20, pady=5)
+        ctk.CTkLabel(self.table_frame, text=f"- {grand_totals['total_retenues']:,.2f}", font=header_font, text_color="#E64A19").grid(row=row_idx, column=6, padx=5, pady=5)
+        row_idx += 1
+        
+        # 4. SPLIT NET TOTALS
+        ctk.CTkLabel(self.table_frame, text=f"Total Déjà Payé:", font=summary_font, text_color="#2E7D32").grid(row=row_idx, column=4, columnspan=2, sticky="e", padx=5, pady=15)
+        ctk.CTkLabel(self.table_frame, text=f"{grand_totals['total_net_paye']:,.2f} DA", font=summary_font, text_color="#2E7D32").grid(row=row_idx, column=6, padx=5, pady=15)
+        row_idx += 1
+        
+        ctk.CTkLabel(self.table_frame, text=f"Reste à Payer:", font=summary_font, text_color="#C62828").grid(row=row_idx, column=4, columnspan=2, sticky="e", padx=5, pady=15)
+        ctk.CTkLabel(self.table_frame, text=f"{grand_totals['total_net_non_paye']:,.2f} DA", font=summary_font, text_color="#C62828").grid(row=row_idx, column=6, padx=5, pady=15)
+        row_idx += 1
+        
+        ctk.CTkLabel(self.table_frame, text=f"Total Général Net:", font=summary_font, text_color="#1f538d").grid(row=row_idx, column=4, columnspan=2, sticky="e", padx=5, pady=15)
+        ctk.CTkLabel(self.table_frame, text=f"{grand_totals['total_net']:,.2f} DA", font=summary_font, text_color="#1f538d").grid(row=row_idx, column=6, padx=5, pady=15)
+
+        # Footer Button Frame
+        footer_frame = ctk.CTkFrame(self, fg_color="transparent")
+        footer_frame.pack(fill="x", side="bottom", padx=20, pady=10)
+        
+        self.btn_print = ctk.CTkButton(footer_frame, text="🖨️ Imprimer Rapport", command=self.print_report,
+                                       fg_color="#1976D2", font=ctk.CTkFont(family="Poppins", size=15, weight="bold"), height=45)
+        self.btn_print.pack(side="right", padx=10)
+        
+        self.btn_close = ctk.CTkButton(footer_frame, text="Fermer", command=self.destroy,
+                                       fg_color="gray", font=ctk.CTkFont(family="Poppins", size=15), height=45)
+        self.btn_close.pack(side="right", padx=10)
+
+    def print_report(self):
+        # Use a static name for temp accumulation report
+        filename = "temp_accumulation_report.pdf"
+        output_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+        
+        try:
+            # Get current date from main app or use today
+            date_val = datetime.datetime.now().strftime("%d/%m/%Y")
+            user_acc = self.parent_app.username
+            
+            generate_accumulation_pdf(self.accum_data, self.grand_totals, output_path, user_acc, date_val)
+            # Open the previewer
+            InvoicePreviewWindow(self, output_path, mode="view")
+        except Exception as e:
+            messagebox.showerror("Erreur", f"Échec de l'impression : {e}", parent=self)
+
+
+class AdminPanelWindow(ctk.CTkToplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("⚙️ Panneau d'Administration")
+        self.geometry("700x550")
+        self.grab_set()
+        
+        # Tabs for Users and Products
+        self.tabs = ctk.CTkTabview(self)
+        self.tabs.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        self.tab_users = self.tabs.add("Utilisateurs")
+        self.tab_prods = self.tabs.add("Produits")
+        
+        self._setup_users_tab()
+        self._setup_prods_tab()
+        
+    def _setup_users_tab(self):
+        # Add User UI
+        add_frame = ctk.CTkFrame(self.tab_users)
+        add_frame.pack(fill="x", padx=10, pady=10)
+        
+        ctk.CTkLabel(add_frame, text="Nouveau Utilisateur:", font=ctk.CTkFont(family="Poppins", size=16, weight="bold")).grid(row=0, column=0, columnspan=2, pady=10)
+        self.new_user_entry = ctk.CTkEntry(add_frame, placeholder_text="Login", font=ctk.CTkFont(family="Poppins", size=14), height=35)
+        self.new_user_entry.grid(row=1, column=0, padx=5, pady=5)
+        self.new_user_entry.bind("<Return>", lambda e: self.new_pass_entry.focus())
+        self.new_pass_entry = ctk.CTkEntry(add_frame, placeholder_text="Pass", show="*", font=ctk.CTkFont(family="Poppins", size=14), height=35)
+        self.new_pass_entry.grid(row=1, column=1, padx=5, pady=5)
+        self.new_pass_entry.bind("<Return>", lambda e: self._add_user_cmd())
+        self.new_role_var = ctk.StringVar(value="user")
+        ctk.CTkOptionMenu(add_frame, values=["user"], variable=self.new_role_var, width=100, state="disabled", font=ctk.CTkFont(family="Poppins", size=13), height=35).grid(row=1, column=2, padx=5, pady=5)
+        
+        ctk.CTkButton(add_frame, text="Ajouter", command=self._add_user_cmd, width=100, height=35, font=ctk.CTkFont(family="Poppins", size=14, weight="bold")).grid(row=1, column=3, padx=5, pady=5)
+        
+        # User List
+        list_frame = ctk.CTkScrollableFrame(self.tab_users, height=300)
+        list_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        self.users_list_frame = list_frame
+        self._refresh_users()
+
+    def _refresh_users(self):
+        for w in self.users_list_frame.winfo_children(): w.destroy()
+        users = database.get_all_users()
+        for u, r in users:
+            f = ctk.CTkFrame(self.users_list_frame)
+            f.pack(fill="x", pady=2)
+            ctk.CTkLabel(f, text=u, width=150, anchor="w").pack(side="left", padx=10)
+            ctk.CTkLabel(f, text=f"({r})", text_color="gray").pack(side="left", padx=10)
+            if u != "admin": # Primary admin protection
+                ctk.CTkButton(f, text="X", width=30, fg_color="#C62828", command=lambda un=u: self._del_user_cmd(un)).pack(side="right", padx=10)
+
+    def _add_user_cmd(self):
+        u = self.new_user_entry.get().strip()
+        p = self.new_pass_entry.get().strip()
+        r = self.new_role_var.get()
+        if u and p:
+            if database.add_user(u, p, r):
+                self._refresh_users()
+                self.new_user_entry.delete(0, 'end'); self.new_pass_entry.delete(0, 'end')
+            else: messagebox.showerror("Error", "User exists or DB error")
+        else: messagebox.showwarning("!", "Fill all fields")
+
+    def _del_user_cmd(self, un):
+        if messagebox.askyesno("Confirm", f"Delete user {un}?", parent=self):
+            database.delete_user(un)
+            self._refresh_users()
+
+    def _setup_prods_tab(self):
+        add_frame = ctk.CTkFrame(self.tab_prods)
+        add_frame.pack(fill="x", padx=10, pady=10)
+        
+        self.new_prod_entry = ctk.CTkEntry(add_frame, placeholder_text="Nom du produit", font=ctk.CTkFont(family="Poppins", size=14), height=35)
+        self.new_prod_entry.grid(row=0, column=0, padx=5, pady=5)
+        self.new_prod_entry.bind("<Return>", lambda e: self.new_price_entry.focus())
+        self.new_price_entry = ctk.CTkEntry(add_frame, placeholder_text="Prix (ex: 6000)", font=ctk.CTkFont(family="Poppins", size=14), height=35)
+        self.new_price_entry.grid(row=0, column=1, padx=5, pady=5)
+        self.new_price_entry.bind("<Return>", lambda e: self._add_prod_cmd())
+        ctk.CTkButton(add_frame, text="Ajouter Produit", command=self._add_prod_cmd, height=35, font=ctk.CTkFont(family="Poppins", size=14, weight="bold")).grid(row=0, column=2, padx=5, pady=5)
+        
+        list_frame = ctk.CTkScrollableFrame(self.tab_prods, height=300)
+        list_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        self.prods_list_frame = list_frame
+        self._refresh_prods()
+
+    def _refresh_prods(self):
+        for w in self.prods_list_frame.winfo_children(): w.destroy()
+        prods = database.get_db_products()
+        for name, price in prods.items():
+            f = ctk.CTkFrame(self.prods_list_frame)
+            f.pack(fill="x", pady=4)
+            p_font = ctk.CTkFont(family="Poppins", size=14)
+            ctk.CTkLabel(f, text=name, width=220, anchor="w", font=p_font).pack(side="left", padx=10)
+            ctk.CTkLabel(f, text=f"{price:,.2f} DA", text_color="#1f538d", font=ctk.CTkFont(family="Poppins", size=14, weight="bold")).pack(side="left", padx=10)
+            ctk.CTkButton(f, text="Suppr", width=60, height=30, fg_color="#C62828", font=p_font, command=lambda n=name: self._del_prod_cmd(n)).pack(side="right", padx=10)
+            ctk.CTkButton(f, text="Modifier", width=80, height=30, fg_color="#1976D2", font=p_font, command=lambda n=name, p=price: self._modify_prod_cmd(n, p)).pack(side="right", padx=5)
+
+    def _modify_prod_cmd(self, name, price):
+        self.new_prod_entry.delete(0, 'end')
+        self.new_prod_entry.insert(0, name)
+        self.new_price_entry.delete(0, 'end')
+        self.new_price_entry.insert(0, str(price))
+        self.new_price_entry.focus()
+
+    def _add_prod_cmd(self):
+        n = self.new_prod_entry.get().strip()
+        p_str = self.new_price_entry.get().strip()
+        try:
+            p = float(p_str)
+            if n and database.add_db_product(n, p):
+                self._refresh_prods()
+                self.new_prod_entry.delete(0, 'end'); self.new_price_entry.delete(0, 'end')
+                # Trigger main app to reload products
+                if hasattr(self.master, 'reload_products'): self.master.reload_products()
+            else: messagebox.showerror("!", "Error adding product")
+        except: messagebox.showerror("!", "Price must be a number")
+
+    def _del_prod_cmd(self, n):
+        if messagebox.askyesno("Confirm", f"Delete {n}?", parent=self):
+            database.delete_db_product(n)
+            self._refresh_prods()
+            if hasattr(self.master, 'reload_products'): self.master.reload_products()
+
+
+class AppFrame(ctk.CTkFrame):
+    def __init__(self, master, username="admin", role="user", on_disconnect=None):
+        super().__init__(master)
+        
+        self.username = username
+        self.role = role
+        self.on_disconnect = on_disconnect
+        
+        # Load products and setup UI
+        self.reload_products()
+        self._setup_ui()
+        
+    def reload_products(self):
+        """Fetches products from the database and updates max limit automatically."""
+        self.products = database.get_db_products()
+        self.current_product_list = list(self.products.keys())
+        
+        # The limit is now automatically tied to the number of available products
+        self.max_products = len(self.current_product_list)
+        if self.max_products == 0: self.max_products = 5 # Safety fallback
+        
+        if hasattr(self, 'nature_menu'):
+            self.nature_menu.configure(values=self.current_product_list)
+        
+        if hasattr(self, 'prod_count_lbl'):
+            self.prod_count_lbl.configure(text=f"Produits: {len(self.added_products)} / {self.max_products}")
+
+    def open_history(self):
+        if hasattr(self.master.master, 'show_history'):
+            self.master.master.show_history(self.username, self.role)
+
+    def open_admin_panel(self):
+        AdminPanelWindow(self)
+    
+    def _setup_ui(self):
+        # Configure Frame grid
+        
+        # Initialize Database
+        database.init_db()
+        
+        # Make grid responsive
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=0)  # top bar
+        self.grid_rowconfigure(1, weight=1)  # main content
+        
+        # --- TOP BAR (Account Info & Disconnect) ---
+        top_bar = ctk.CTkFrame(self, fg_color="#f8f9fa", height=60, corner_radius=0, border_width=1, border_color="#e0e0e0")
+        top_bar.grid(row=0, column=0, sticky="ew", padx=0, pady=0)
+        top_bar.grid_columnconfigure(1, weight=1)
+        
+        # Info Frame (Username + Admin Button)
+        info_frame = ctk.CTkFrame(top_bar, fg_color="transparent")
+        info_frame.grid(row=0, column=0, padx=15, pady=2, sticky="w")
+
+        role_display = "Administrateur" if self.role == "admin" else "Utilisateur"
+        account_info = ctk.CTkLabel(info_frame, 
+                                    text=f"👤  {self.username.upper()}  |  {role_display}",
+                                    font=ctk.CTkFont(family="Poppins", size=16, weight="bold"),
+                                    text_color="#1f538d")
+        account_info.pack(side="left")
+        
+        # Admin Panel restricted (Next to user info)
+        if self.role == "admin":
+            self.admin_btn = ctk.CTkButton(info_frame, text="⚙️ Admin Panel", width=140, height=35,
+                                            fg_color="#1565C0", font=ctk.CTkFont(family="Poppins", size=13),
+                                            command=self.open_admin_panel)
+            self.admin_btn.pack(side="left", padx=(20, 5))
+            
+        # History Button (Moved to top)
+        self.hist_btn = ctk.CTkButton(info_frame, text="📜 Historique", width=140, height=35,
+                                       fg_color="#455A64", font=ctk.CTkFont(family="Poppins", size=13),
+                                       command=self.open_history)
+        self.hist_btn.pack(side="left", padx=5)
+
+        # Clear All Button (Moved to top)
+        self.clear_btn = ctk.CTkButton(info_frame, text="🧹 Effacer Tout", width=140, height=35,
+                                        fg_color="#C62828", font=ctk.CTkFont(family="Poppins", size=13),
+                                        command=self.clear_all)
+        self.clear_btn.pack(side="left", padx=5)
+        
+        
+
+        
+        
+        # Disconnect button
+        disconnect_btn = ctk.CTkButton(top_bar, text="🔒 Déconnexion", width=160, height=35,
+                                        fg_color="#C62828", hover_color="#8E0000",
+                                        font=ctk.CTkFont(family="Poppins", size=14, weight="bold"),
+                                        command=self._disconnect)
+        disconnect_btn.grid(row=0, column=2, padx=15, pady=5, sticky="e")
+        
+        self.scrollable_frame = ctk.CTkScrollableFrame(self)
+        self.scrollable_frame.grid(row=1, column=0, sticky="nsew", padx=20, pady=(10, 20))
+        self.scrollable_frame.grid_columnconfigure(0, weight=1)
+        self.scrollable_frame.grid_columnconfigure(1, weight=1)
+
+        row_idx = 0
+        
+        # --- TITLE ---
+        title = ctk.CTkLabel(self.scrollable_frame, text="Generate Invoice", 
+                             font=ctk.CTkFont(family="Poppins", size=36, weight="bold"))
+        title.grid(row=row_idx, column=0, columnspan=2, pady=(20, 30))
+        row_idx += 1
+        
+        # --- IDENTITY DETAILS ---
+        id_frame = ctk.CTkFrame(self.scrollable_frame)
+        id_frame.grid(row=row_idx, column=0, columnspan=2, sticky="ew", pady=10)
+        id_frame.grid_columnconfigure(1, weight=1)
+        id_frame.grid_columnconfigure(3, weight=1)
+        row_idx += 1
+        
+        ctk.CTkLabel(id_frame, text="Identity Details", font=ctk.CTkFont(family="Poppins", size=20, weight="bold")).grid(row=0, column=0, columnspan=4, pady=15)
+        
+        # Row 1: Nom de l'agriculteur & Address
+        ctk.CTkLabel(id_frame, text="Nom de l'agriculteur", font=ctk.CTkFont(family="Poppins", size=15)).grid(row=1, column=0, padx=10, pady=10, sticky="e")
+        self.farmer_entry = ctk.CTkEntry(id_frame, font=ctk.CTkFont(family="Poppins", size=16), height=40)
+        self.farmer_entry.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
+        vcmd_farmer = (self.register(self._validate_farmer), '%P')
+        self.farmer_entry.configure(validate='key', validatecommand=vcmd_farmer)
+        self.farmer_entry.bind("<Return>", self._on_farmer_enter)
+
+        ctk.CTkLabel(id_frame, text="L'adresse", font=ctk.CTkFont(family="Poppins", size=15)).grid(row=1, column=2, padx=10, pady=10, sticky="e")
+        self.remis_entry = ctk.CTkEntry(id_frame, state="disabled", font=ctk.CTkFont(family="Poppins", size=16), height=40)
+        self.remis_entry.grid(row=1, column=3, padx=10, pady=10, sticky="ew")
+        self.remis_entry.bind("<Return>", self._on_address_enter)
+        
+        # Row 2: Wilaya
+        ctk.CTkLabel(id_frame, text="Wilaya", font=ctk.CTkFont(family="Poppins", size=15)).grid(row=2, column=0, padx=10, pady=10, sticky="e")
+        self.wilaya_var = ctk.StringVar(value="Ouargla")
+        self.wilaya_menu = ctk.CTkOptionMenu(id_frame, values=["Ouargla", "Tougourt", "Ilizi"], 
+                                             variable=self.wilaya_var, command=self._on_wilaya_choice, state="disabled",
+                                             font=ctk.CTkFont(family="Poppins", size=15), height=35)
+        self.wilaya_menu.grid(row=2, column=1, padx=10, pady=10, sticky="w")
+
+        # Row 3: NIF & Piece ID
+        ctk.CTkLabel(id_frame, text="NIF (Facultatif)", font=ctk.CTkFont(family="Poppins", size=15)).grid(row=3, column=0, padx=10, pady=10, sticky="e")
+        self.nif_entry = ctk.CTkEntry(id_frame, state="disabled", font=ctk.CTkFont(family="Poppins", size=16), height=40)
+        self.nif_entry.grid(row=3, column=1, padx=10, pady=10, sticky="ew")
+        vcmd_nif = (self.register(self._validate_nif), '%P')
+        self.nif_entry.configure(validate='key', validatecommand=vcmd_nif)
+        self.nif_entry.bind("<KeyRelease>", self._on_nif_key)
+        self.nif_entry.bind("<Return>", self._on_nif_enter)
+
+        ctk.CTkLabel(id_frame, text="Pièce d'identité (9 chiffres)", font=ctk.CTkFont(family="Poppins", size=15)).grid(row=3, column=2, padx=10, pady=10, sticky="e")
+        self.piece_entry = ctk.CTkEntry(id_frame, state="disabled", font=ctk.CTkFont(family="Poppins", size=16), height=40)
+        self.piece_entry.grid(row=3, column=3, padx=10, pady=10, sticky="ew")
+        vcmd = (self.register(self._validate_piece), '%P')
+        self.piece_entry.configure(validate='key', validatecommand=vcmd)
+        self.piece_entry.bind("<KeyRelease>", self._on_piece_key)
+        self.piece_entry.bind("<Return>", self._on_piece_enter)
+        
+        # Row 4: Date & Decompte
+        ctk.CTkLabel(id_frame, text="Vérifier le (Date)", font=ctk.CTkFont(family="Poppins", size=15)).grid(row=4, column=0, padx=10, pady=10, sticky="e")
+        self.date_entry = ctk.CTkEntry(id_frame, font=ctk.CTkFont(family="Poppins", size=15), height=35)
+        self.date_entry.insert(0, datetime.datetime.now().strftime("%d/%m/%Y"))
+        self.date_entry.grid(row=4, column=1, padx=10, pady=10, sticky="w")
+        self.date_entry.configure(state="disabled")
+        
+        ctk.CTkLabel(id_frame, text="Decompte N°", font=ctk.CTkFont(family="Poppins", size=15)).grid(row=4, column=2, padx=10, pady=10, sticky="e")
+        self.decompte_entry = ctk.CTkEntry(id_frame, font=ctk.CTkFont(family="Poppins", size=15), height=35)
+        self.current_count = self.load_count()
+        year = datetime.datetime.now().year
+        self.decompte_entry.insert(0, f"{self.current_count}/{year}")
+        self.decompte_entry.grid(row=4, column=3, padx=10, pady=10, sticky="ew")
+        self.decompte_entry.configure(state="disabled")
+
+        # Row 5: Edit Identity Button (Allows fixing typos) - Starts DISABLED
+        self.edit_id_btn = ctk.CTkButton(id_frame, text="Modifier l'identité ✏️", 
+                                         width=200, height=35, fg_color="#37474F",
+                                         state="disabled", font=ctk.CTkFont(family="Poppins", size=13),
+                                         command=self.unlock_identity)
+        self.edit_id_btn.grid(row=5, column=0, columnspan=4, pady=(10, 15))
+
+        # Bind checks to all identity fields to enable button when full
+        self.farmer_entry.bind("<KeyRelease>", self._check_id_ready, add="+")
+        self.remis_entry.bind("<KeyRelease>", self._check_id_ready, add="+")
+        self.nif_entry.bind("<KeyRelease>", self._check_id_ready, add="+")
+        self.piece_entry.bind("<KeyRelease>", self._check_id_ready, add="+")
+
+
+        # --- PRODUCT DATA ---
+        prod_frame = ctk.CTkFrame(self.scrollable_frame)
+        prod_frame.grid(row=row_idx, column=0, columnspan=2, sticky="ew", pady=10)
+        prod_frame.grid_columnconfigure(1, weight=1)
+        prod_frame.grid_columnconfigure(3, weight=1)
+        row_idx += 1
+        
+        ctk.CTkLabel(prod_frame, text="Détails des Produits", font=ctk.CTkFont(family="Poppins", size=20, weight="bold")).grid(row=0, column=0, columnspan=2, pady=15)
+        
+        self.multi_prod_var = ctk.BooleanVar(value=False)
+        self.multi_prod_check = ctk.CTkCheckBox(prod_frame, text="Plusieurs produits ?", variable=self.multi_prod_var, 
+                                                font=ctk.CTkFont(family="Poppins", size=15, weight="bold"))
+        self.multi_prod_check.grid(row=0, column=2, columnspan=2, padx=20, sticky="e")
+
+        ctk.CTkLabel(prod_frame, text="Nature de produit", font=ctk.CTkFont(family="Poppins", size=15)).grid(row=1, column=0, padx=10, pady=10, sticky="e")
+        self.nature_var = ctk.StringVar(value=" ")
+        self.nature_menu = ctk.CTkOptionMenu(prod_frame, values=self.current_product_list, variable=self.nature_var, 
+                                             command=self._on_nature_choice, state="disabled", font=ctk.CTkFont(family="Poppins", size=15), height=35)
+        self.nature_menu.grid(row=1, column=1, padx=10, pady=10, sticky="w")
+        self.nature_menu.bind("<Return>", self._on_nature_enter)
+        
+        ctk.CTkLabel(prod_frame, text="Quantité", font=ctk.CTkFont(family="Poppins", size=15)).grid(row=1, column=2, padx=10, pady=10, sticky="e")
+        self.quantite_entry = ctk.CTkEntry(prod_frame, state="disabled", font=ctk.CTkFont(family="Poppins", size=16), height=35)
+        self.quantite_entry.grid(row=1, column=3, padx=10, pady=10, sticky="w")
+        self.quantite_entry.bind("<Return>", self._on_qty_enter)
+        self.quantite_entry.bind("<Control-Return>", lambda e: self._on_qty_enter(e, jump_to_taxes=True))
+        
+        ctk.CTkLabel(prod_frame, text="Bonification", font=ctk.CTkFont(family="Poppins", size=15)).grid(row=2, column=0, padx=10, pady=10, sticky="e")
+        self.bon_entry = ctk.CTkEntry(prod_frame, state="disabled", font=ctk.CTkFont(family="Poppins", size=16), height=35)
+        self.bon_entry.grid(row=2, column=1, padx=10, pady=10, sticky="w")
+        self.bon_entry.bind("<Return>", self._on_bon_enter)
+        self.bon_entry.bind("<Control-Return>", lambda e: self._on_bon_enter(e, jump_to_taxes=True))
+        
+        ctk.CTkLabel(prod_frame, text="Réfaction", font=ctk.CTkFont(family="Poppins", size=15)).grid(row=2, column=2, padx=10, pady=10, sticky="e")
+        self.refac_entry = ctk.CTkEntry(prod_frame, state="disabled", font=ctk.CTkFont(family="Poppins", size=16), height=35)
+        self.refac_entry.grid(row=2, column=3, padx=10, pady=10, sticky="w")
+        self.refac_entry.bind("<Return>", self._on_refac_enter)
+        self.refac_entry.bind("<Control-Return>", lambda e: self._on_refac_enter(e, jump_to_taxes=True))
+        
+        # Added products summary & buttons
+        self.added_products = []
+        
+        self.add_prod_btn = ctk.CTkButton(prod_frame, text="Ajouter le produit", command=self.add_product, 
+                                          state="disabled", font=ctk.CTkFont(family="Poppins", size=14, weight="bold"), height=40)
+        self.add_prod_btn.grid(row=3, column=0, pady=15, padx=10)
+        
+        self.clear_prod_btn = ctk.CTkButton(prod_frame, text="Vider la liste", command=self.clear_products, 
+                                            fg_color="#C62828", state="disabled", font=ctk.CTkFont(family="Poppins", size=14), height=40)
+        self.clear_prod_btn.grid(row=3, column=1, pady=15, padx=10)
+        
+        self.prod_count_lbl = ctk.CTkLabel(prod_frame, text=f"Produits: 0 / {self.max_products}", 
+                                           font=ctk.CTkFont(family="Poppins", size=15, weight="bold"))
+        self.prod_count_lbl.grid(row=3, column=2, padx=10)
+        
+        self.to_taxes_btn = ctk.CTkButton(prod_frame, text="Terminer et passer aux taxes ➔", command=self._go_to_taxes, 
+                                          state="disabled", fg_color="#E65100", font=ctk.CTkFont(family="Poppins", size=14, weight="bold"), height=40)
+        self.to_taxes_btn.grid(row=3, column=3, pady=15, padx=10)
+        
+        self.prod_listbox = ctk.CTkScrollableFrame(prod_frame, height=120, label_text="Produits ajoutés", 
+                                                   label_font=ctk.CTkFont(family="Poppins", size=14, weight="bold"))
+        self.prod_listbox.grid(row=4, column=0, columnspan=4, sticky="ew", padx=10, pady=10)
+        
+        # --- TAXES / RETENUES ---
+        tax_frame = ctk.CTkFrame(self.scrollable_frame)
+        tax_frame.grid(row=row_idx, column=0, columnspan=2, sticky="ew", pady=10)
+        tax_frame.grid_columnconfigure(1, weight=1)
+        tax_frame.grid_columnconfigure(2, weight=1)
+        tax_frame.grid_columnconfigure(3, weight=1)
+        row_idx += 1
+        
+        ctk.CTkLabel(tax_frame, text="Retenues Diverses", font=ctk.CTkFont(family="Poppins", size=22, weight="bold")).grid(row=0, column=0, columnspan=4, pady=15)
+        
+        ctk.CTkLabel(tax_frame, text="Tax Name", font=ctk.CTkFont(family="Poppins", size=15, weight="bold")).grid(row=1, column=0, padx=5, pady=5, sticky="w")
+        ctk.CTkLabel(tax_frame, text="Quantité", font=ctk.CTkFont(family="Poppins", size=15, weight="bold")).grid(row=1, column=1, padx=5, pady=5)
+        ctk.CTkLabel(tax_frame, text="P.U", font=ctk.CTkFont(family="Poppins", size=15, weight="bold")).grid(row=1, column=2, padx=5, pady=5)
+        ctk.CTkLabel(tax_frame, text="Amount / Total", font=ctk.CTkFont(family="Poppins", size=15, weight="bold")).grid(row=1, column=3, padx=5, pady=5)
+        
+        self.tax_inputs = []
+        for i, tax_name in enumerate(TAXES_LIST):
+            r = i + 2
+            ctk.CTkLabel(tax_frame, text=tax_name, font=ctk.CTkFont(family="Poppins", size=14)).grid(row=r, column=0, padx=5, pady=8, sticky="w")
+            
+            if tax_name in ["taxe pour compte CNA", "taxe pour chambre agricole"]:
+                # Show all three columns for these dynamic taxes
+                nbre_en = ctk.CTkEntry(tax_frame, width=80)
+                nbre_en.grid(row=r, column=1, padx=5, pady=5)
+                nbre_en.configure(state="disabled")
+                
+                pu_en = ctk.CTkEntry(tax_frame, width=80)
+                pu_en.grid(row=r, column=2, padx=5, pady=5)
+                if tax_name == "taxe pour compte CNA":
+                    pu_en.insert(0, "15")
+                pu_en.configure(state="disabled")
+                
+                amount_en = ctk.CTkEntry(tax_frame, width=120, height=35, font=ctk.CTkFont(family="Poppins", size=15))
+                amount_en.grid(row=r, column=3, padx=5, pady=5)
+                amount_en.configure(state="disabled")
+            else:
+                # For all other taxes: only show Amount column
+                nbre_en = ctk.CTkEntry(tax_frame, width=80)
+                nbre_en.grid_forget()  # hide
+                
+                pu_en = ctk.CTkEntry(tax_frame, width=80)
+                pu_en.grid_forget()  # hide
+                
+                amount_en = ctk.CTkEntry(tax_frame, width=120, height=35, font=ctk.CTkFont(family="Poppins", size=15))
+                amount_en.grid(row=r, column=3, padx=5, pady=5)
+            
+            # Universal binds for tax amounts
+            amount_en.bind("<KeyRelease>", lambda e: self.calculate())
+            amount_en.bind("<Return>", lambda e, idx=i: self._on_tax_enter(idx))
+            
+            self.tax_inputs.append({
+                "name": tax_name,
+                "nbre": nbre_en,
+                "pu": pu_en,
+                "amount": amount_en
+            })
+
+        # "Done" button for taxes
+        self.tax_done_btn = ctk.CTkButton(tax_frame, text="Confirm Taxes (Done)", command=self.confirm_taxes, 
+                                          fg_color="#3B8ED0", font=ctk.CTkFont(family="Poppins", size=16, weight="bold"), height=45)
+        self.tax_done_btn.grid(row=len(TAXES_LIST) + 2, column=3, pady=15, padx=5)
+            
+        # --- RESULTS / CALC ---
+        res_frame = ctk.CTkFrame(self.scrollable_frame)
+        res_frame.grid(row=row_idx, column=0, columnspan=2, sticky="ew", pady=10)
+        row_idx += 1
+        
+        self.res_lbl = ctk.CTkLabel(res_frame, text="Totals will be calculated automatically.", 
+                                         font=ctk.CTkFont(family="Poppins", size=24, weight="bold"))
+        self.res_lbl.pack(pady=25)
+        
+        self._compiled_data = None
+        
+        # Apply screenshot protection and set initial focus
+        self.after(200, self._init_final_setup)
+
+    def _disconnect(self):
+        """Handles disconnect: closes App and returns to login."""
+        if self.on_disconnect:
+            self.on_disconnect()
+        else:
+            self.destroy()
+
+    def _init_final_setup(self):
+        """Handles initial focus once UI is ready."""
+        self.farmer_entry.focus()
+
+    def load_count(self):
+        try:
+            if os.path.exists("counter.txt"):
+                with open("counter.txt", "r") as f:
+                    return int(f.read().strip())
+            return 1
+        except:
+            return 1
+
+    def _check_id_ready(self, event=None):
+        """Disables/Enables the Modify button based on form completion."""
+        # Only check if we are NOT in 'Done' state (green button state handled in unlock/lock)
+        if self.edit_id_btn.cget("text") == "Terminer (Done) ✅":
+            return
+
+        name = self.farmer_entry.get().strip()
+        addr = self.remis_entry.get().strip()
+        nif = self.nif_entry.get().strip()
+        piece = self.piece_entry.get().strip()
+        wilaya = self.wilaya_var.get().strip()
+        
+        if name and addr and wilaya and (len(nif) == 0 or len(nif) == 20) and len(piece) == 9:
+            self.edit_id_btn.configure(state="normal")
+        else:
+            self.edit_id_btn.configure(state="disabled")
+
+
+    def unlock_identity(self):
+        """Unlocks all identity fields for quick correction of typos and changes button to 'Done'."""
+        self.last_focused_before_edit = self.focus_get()
+        self.farmer_entry.configure(state="normal")
+        self.remis_entry.configure(state="normal")
+        self.wilaya_menu.configure(state="normal")
+        self.nif_entry.configure(state="normal")
+        self.piece_entry.configure(state="normal")
+        
+        # Change button to "Done" state
+        self.edit_id_btn.configure(text="Terminer (Done) ✅", fg_color="#2E7D32", command=self.lock_identity)
+        self.farmer_entry.focus()
+
+    def lock_identity(self):
+        """Re-locks identity fields and restores the 'Edit' button."""
+        self.farmer_entry.configure(state="disabled")
+        self.remis_entry.configure(state="disabled")
+        self.wilaya_menu.configure(state="disabled")
+        self.nif_entry.configure(state="disabled")
+        self.piece_entry.configure(state="disabled")
+        
+        # Change button back to "Modify" state
+        self.edit_id_btn.configure(text="Modifier l'identité ✏️", fg_color="#37474F", command=self.unlock_identity)
+        
+        # Restore focus to where it was
+        if hasattr(self, 'last_focused_before_edit') and self.last_focused_before_edit:
+            self.last_focused_before_edit.focus()
+        else:
+            self.quantite_entry.focus()
+
+
+    def _on_tax_enter(self, index):
+        """Moves focus to the next tax field when Enter is pressed."""
+        if index < len(self.tax_inputs) - 1:
+            self.tax_inputs[index + 1]["amount"].focus()
+        else:
+            self.calc_btn.focus()
+            messagebox.showinfo("Navigation", "Saisie des taxes terminée. Vous pouvez cliquer sur 'Final Calculate & Generate' !")
+
+
+    def save_count(self, n):
+        try:
+            with open("counter.txt", "w") as f:
+                f.write(str(n))
+        except:
+            pass
+
+    def confirm_taxes(self):
+        """Validates all inputs and enables the Final Calculate/Generate buttons."""
+        if self.calculate():
+            # Disable tax modification
+            # Lock EVERYTHING
+            self.quantite_entry.configure(state="disabled")
+            self.bon_entry.configure(state="disabled")
+            self.refac_entry.configure(state="disabled")
+            self.nature_menu.configure(state="disabled")
+            self.add_prod_btn.configure(state="disabled")
+            self.clear_prod_btn.configure(state="disabled")
+            
+            # Lock taxes
+            for tax in self.tax_inputs:
+                tax["nbre"].configure(state="disabled")
+                tax["pu"].configure(state="disabled")
+                tax["amount"].configure(state="disabled")
+            
+            # Lock identity
+            self.farmer_entry.configure(state="disabled")
+            self.remis_entry.configure(state="disabled")
+            self.wilaya_menu.configure(state="disabled")
+            self.nif_entry.configure(state="disabled")
+            self.piece_entry.configure(state="disabled")
+            
+            self.tax_done_btn.configure(state="disabled", text="Confirmed & Locked")
+
+            messagebox.showinfo("Confirmed", "Les taxes et l'identité ont été verrouillées. Le PDF va être généré.", parent=self)
+            self.generate()
+        else:
+            # calculate() already handles visual warning in res_lbl
+            self.calc_btn.configure(state="disabled")
+
+    def _validate_farmer(self, value):
+        """Allow only letters and spaces."""
+        if value == '':
+            return True
+        # Check if all chars are alpha or space
+        return all(c.isalpha() or c.isspace() for c in value)
+
+    def _validate_piece(self, value):
+        """Allow only digits, max 9 characters."""
+        return (value == '' or value.isdigit()) and len(value) <= 9
+
+    def _validate_nif(self, value):
+        """Allow only digits, max 20 characters."""
+        return (value == '' or value.isdigit()) and len(value) <= 20
+
+    def _on_nif_key(self, event=None):
+        """Live feedback on NIF length."""
+        val = self.nif_entry.get().strip()
+        if len(val) == 20 or len(val) == 0:
+            self.nif_entry.configure(border_color=["#979797", "#3d3d3d"]) # default
+        else:
+            self.nif_entry.configure(border_color="red")
+
+    def _on_piece_key(self, event=None):
+        """Live feedback on ID length."""
+        val = self.piece_entry.get().strip()
+        if len(val) == 9:
+            self.piece_entry.configure(border_color=["#979797", "#3d3d3d"]) # default
+        else:
+            self.piece_entry.configure(border_color="red")
+
+    def safe_float(self, val):
+        try:
+            val = val.replace(',', '.')
+            if not val.strip(): return 0.0
+            return float(val)
+        except:
+            return 0.0
+
+    def _on_nature_choice(self, choice):
+        """When product is selected, move focus to Quantity."""
+        if choice and choice.strip():
+            self.quantite_entry.focus()
+
+    def _on_nature_enter(self, event=None):
+        """Handler for Enter key on the product dropdown."""
+        choice = self.nature_var.get()
+        if choice and choice.strip():
+            self.quantite_entry.focus()
+        else:
+            messagebox.showwarning("Précision", "Veuillez sélectionner une nature de produit dans la liste.", parent=self)
+            self.nature_menu.focus()
+            try:
+                self.nature_menu._open_dropdown_menu()
+            except:
+                pass
+
+    # --- GUIDED WORKFLOW HANDLERS ---
+    def _on_farmer_enter(self, event=None):
+        if self.farmer_entry.get().strip():
+            self.remis_entry.configure(state="normal")
+            self.remis_entry.focus()
+        else:
+            messagebox.showwarning("Précision", "Veuillez saisir le nom de l'agriculteur.", parent=self)
+            self.farmer_entry.focus()
+
+    def _on_address_enter(self, event=None):
+        if self.remis_entry.get().strip():
+            self.wilaya_menu.configure(state="normal")
+            self.wilaya_menu.focus()
+            try:
+                self.wilaya_menu._open_dropdown_menu()
+            except:
+                pass
+        else:
+            messagebox.showwarning("Précision", "Veuillez saisir l'adresse.", parent=self)
+            self.remis_entry.focus()
+
+    def _on_wilaya_choice(self, choice):
+        """When wilaya is selected, move focus to NIF."""
+        if choice.strip():
+            self.nif_entry.configure(state="normal")
+            self.nif_entry.focus()
+
+
+    def _on_nif_enter(self, event=None):
+        val = self.nif_entry.get().strip()
+        if len(val) == 20 or len(val) == 0:
+            self.piece_entry.configure(state="normal")
+            self.piece_entry.focus()
+        else:
+            messagebox.showwarning("Validation", "Le NIF doit contenir exactement 20 chiffres ou rester vide.", parent=self)
+            self.nif_entry.focus()
+
+    def _on_piece_enter(self, event=None):
+        val = self.piece_entry.get().strip()
+        if len(val) == 9:
+            # Unlock the entire Product Details section
+            self.nature_menu.configure(state="normal")
+            self.quantite_entry.configure(state="normal")
+            self.bon_entry.configure(state="normal")
+            self.refac_entry.configure(state="normal")
+            self.add_prod_btn.configure(state="normal")
+            self.clear_prod_btn.configure(state="normal")
+            
+            # ASK: Multiple products?
+            ans = messagebox.askyesno("Multi-Produits", "L'agriculteur a-t-il plus d'un produit ?", parent=self)
+            if ans:
+                self.multi_prod_var.set(True)
+            else:
+                self.multi_prod_var.set(False)
+
+            # Move to nature de produit and drop the list
+            self.nature_menu.focus()
+            try:
+                self.nature_menu._open_dropdown_menu()
+            except:
+                pass
+        else:
+            messagebox.showwarning("Validation", "La pièce d'identité doit contenir exactement 9 chiffres.", parent=self)
+            self.piece_entry.focus()
+
+    def _on_qty_enter(self, event=None, jump_to_taxes=False):
+        if jump_to_taxes:
+            self._on_refac_enter(jump_to_taxes=True)
+            return
+        if self.safe_float(self.quantite_entry.get()) > 0:
+            self.bon_entry.focus()
+        else:
+            messagebox.showwarning("Validation", "La quantité doit être supérieure à 0.")
+
+    def _on_bon_enter(self, event=None, jump_to_taxes=False):
+        if jump_to_taxes:
+            self._on_refac_enter(jump_to_taxes=True)
+            return
+        self.refac_entry.focus()
+
+    def _on_refac_enter(self, event=None, jump_to_taxes=False):
+        bon_val = self.bon_entry.get().strip()
+        refac_val = self.refac_entry.get().strip()
+        if not bon_val and not refac_val:
+            messagebox.showwarning("Précision", "Veuillez saisir soit une bonification, soit une réfaction.")
+            self.bon_entry.focus()
+        else:
+            self.add_product(jump_to_taxes=jump_to_taxes)
+
+    def add_product(self, jump_to_taxes=False):
+        if len(self.added_products) >= 5:
+            messagebox.showwarning("Limite atteinte", "Vous ne pouvez pas ajouter plus de 5 produits.", parent=self)
+            return
+        # 1. Identity Validation
+        farmer = self.farmer_entry.get().strip()
+        adresse = self.remis_entry.get().strip()
+        nif = self.nif_entry.get().strip()
+        piece = self.piece_entry.get().strip()
+        
+        if not farmer:
+            messagebox.showwarning("Validation", "Veuillez saisir le nom de l'agriculteur.", parent=self)
+            self.farmer_entry.focus()
+            return
+        if not adresse:
+            messagebox.showwarning("Validation", "Veuillez saisir l'adresse.", parent=self)
+            self.remis_entry.focus()
+            return
+        if nif and len(nif) != 20:
+            messagebox.showwarning("Validation", "Le NIF doit contenir exactement 20 chiffres (ou rester vide).", parent=self)
+            self.nif_entry.focus()
+            return
+        if len(piece) != 9:
+            messagebox.showwarning("Validation", "La pièce d'identité doit contenir exactement 9 chiffres.", parent=self)
+            self.piece_entry.focus()
+            return
+
+        nature = self.nature_var.get()
+        if not nature or nature.strip() == "":
+            messagebox.showwarning("Validation", "Veuillez sélectionner la nature du produit.", parent=self)
+            return
+
+        prix_u = self.products.get(nature, 0)
+        qte = self.safe_float(self.quantite_entry.get())
+        if qte <= 0:
+            messagebox.showwarning("Validation", "La quantité doit être supérieure à 0.")
+            return
+            
+        bon = self.safe_float(self.bon_entry.get())
+        refac = self.safe_float(self.refac_entry.get())
+        
+        if bon <= 0 and refac <= 0:
+            messagebox.showwarning("Validation", "Chaque produit doit avoir soit une bonification, soit une réfaction.")
+            return
+        
+        montant_avant = qte * prix_u
+        montant_brut = montant_avant + (qte * bon) - (qte * refac)
+        
+        self.added_products.append({
+            "nature": nature,
+            "quantite": qte,
+            "prix_u": prix_u,
+            "montant_avant_tax": montant_avant,
+            "bon": bon,
+            "refac": refac,
+            "montant_brut": montant_brut
+        })
+        
+        row = ctk.CTkFrame(self.prod_listbox, fg_color="gray25", corner_radius=6)
+        row.pack(fill="x", padx=2, pady=2)
+        
+        prod_info = f"📦 {nature} | Qte: {qte} | {montant_brut:,.2f} DA"
+        lbl = ctk.CTkLabel(row, text=prod_info, anchor="w", font=ctk.CTkFont(size=11))
+        lbl.pack(fill="x", padx=10, pady=3)
+        
+        self.quantite_entry.delete(0, 'end')
+        self.bon_entry.configure(state="normal")
+        self.bon_entry.delete(0, 'end')
+        self.refac_entry.configure(state="normal")
+        self.refac_entry.delete(0, 'end')
+        
+        # Lock Identity Fields after first product is added
+        self.farmer_entry.configure(state="disabled")
+        self.remis_entry.configure(state="disabled")
+        self.nif_entry.configure(state="disabled")
+        self.piece_entry.configure(state="disabled")
+        
+        self.prod_count_lbl.configure(text=f"Produits: {len(self.added_products)} / {self.max_products}")
+        self.to_taxes_btn.configure(state="normal")
+        
+        if len(self.added_products) >= self.max_products:
+            self.add_prod_btn.configure(state="disabled")
+        
+        self.calculate()
+        
+        can_continue_products = self.multi_prod_var.get() and len(self.added_products) < self.max_products
+        
+        if jump_to_taxes or not can_continue_products:
+            self._go_to_taxes()
+        else:
+            self.nature_menu.focus()
+            try:
+                self.nature_menu._open_dropdown_menu()
+            except:
+                pass
+
+    def _go_to_taxes(self):
+        self.add_prod_btn.configure(state="disabled")
+        for tax in self.tax_inputs:
+            if tax["name"] == "redevance CH AGP":
+                tax["amount"].focus()
+                break
+        
+    def clear_products(self, focus_nature=True):
+        self.added_products = []
+        for widget in self.prod_listbox.winfo_children():
+            widget.destroy()
+        
+        self.prod_count_lbl.configure(text=f"Produits: 0 / {self.max_products}")
+        self.add_prod_btn.configure(state="normal")
+        self.to_taxes_btn.configure(state="disabled")
+        
+        # Clear current inputs to prevent calculate() from picking up partial values
+        self.quantite_entry.delete(0, 'end')
+        self.bon_entry.configure(state="normal")
+        self.bon_entry.delete(0, 'end')
+        self.refac_entry.configure(state="normal")
+        self.refac_entry.delete(0, 'end')
+        self.nature_var.set(" ")
+        
+        # Focus back to nature_menu and open dropdown if requested
+        if focus_nature:
+            self.nature_menu.focus()
+            try:
+                self.nature_menu._open_dropdown_menu()
+            except:
+                pass
+
+        
+        # Reset Taxes
+        for tax in self.tax_inputs:
+            tax["nbre"].configure(state="normal")
+            tax["nbre"].delete(0, 'end')
+            if tax["name"] == "taxe pour compte CNA":
+                tax["pu"].configure(state="normal")
+                tax["pu"].delete(0, 'end')
+                tax["pu"].insert(0, "15")
+                tax["pu"].configure(state="disabled")
+            elif tax["name"] == "taxe pour chambre agricole":
+                tax["pu"].configure(state="normal")
+                tax["pu"].delete(0, 'end')
+                tax["pu"].configure(state="disabled")
+            else:
+                tax["pu"].delete(0, 'end')
+            
+            tax["amount"].configure(state="normal")
+            tax["amount"].delete(0, 'end')
+            
+            # Re-read initial states
+            if tax["name"] in ["taxe pour compte CNA", "taxe pour chambre agricole"]:
+                tax["nbre"].configure(state="disabled")
+                tax["amount"].configure(state="disabled")
+        
+        self.calculate()
+
+    def clear_all(self):
+        """Resets the entire application to the startup state."""
+        # 1. Clear products
+        self.added_products = []
+        for widget in self.prod_listbox.winfo_children():
+            widget.destroy()
+        
+        # 2. Reset Identity
+        for entry in [self.farmer_entry, self.remis_entry, self.nif_entry, self.piece_entry]:
+            entry.configure(state="normal")
+            entry.delete(0, 'end')
+        
+        # Reset restricted states
+        self.remis_entry.configure(state="disabled")
+        self.wilaya_menu.configure(state="disabled")
+        self.wilaya_var.set("Ouargla")
+        self.nif_entry.configure(state="disabled")
+        self.piece_entry.configure(state="disabled")
+
+        
+        # 3. Reset Product inputs
+        for entry in [self.quantite_entry, self.bon_entry, self.refac_entry]:
+            entry.configure(state="normal")
+            entry.delete(0, 'end')
+            entry.configure(state="disabled")
+        self.nature_var.set(" ")
+        self.nature_menu.configure(state="normal")
+        
+        # 4. Reset Taxes using existing clear_products logic
+        self.multi_prod_var.set(False)
+        self.clear_products(focus_nature=False) # This handles tax reset without opening menu
+        
+        # 5. Reset buttons
+        self.add_prod_btn.configure(state="disabled")
+        self.clear_prod_btn.configure(state="disabled")
+        self.tax_done_btn.configure(state="normal", text="Confirm Taxes (Done)")
+        # self.gen_btn.configure(state="disabled") (Removed redundant button)
+        pass
+        
+        # 6. Reset visual feedback
+        self.res_lbl.configure(text="Totals will be calculated automatically.")
+        self.farmer_entry.configure(border_color=["#979797", "#3d3d3d"])
+        self.remis_entry.configure(border_color=["#979797", "#3d3d3d"])
+        self.nif_entry.configure(border_color=["#979797", "#3d3d3d"])
+        self.piece_entry.configure(border_color=["#979797", "#3d3d3d"])
+        
+        self.farmer_entry.focus()
+
+    def calculate(self):
+        # 1. Identity Validation
+        farmer = self.farmer_entry.get().strip()
+        adresse = self.remis_entry.get().strip()
+        nif = self.nif_entry.get().strip()
+        piece = self.piece_entry.get().strip()
+        
+        is_valid = True
+        
+        # Highlight Farmer
+        if not farmer:
+            self.farmer_entry.configure(border_color="red")
+            is_valid = False
+        else:
+            self.farmer_entry.configure(border_color=["#979797", "#3d3d3d"]) # default
+            
+        # Highlight Address
+        if not adresse:
+            self.remis_entry.configure(border_color="red")
+            is_valid = False
+        else:
+            self.remis_entry.configure(border_color=["#979797", "#3d3d3d"]) # default
+        
+        # Highlight NIF
+        if nif and len(nif) != 20:
+            self.nif_entry.configure(border_color="red")
+            is_valid = False
+        else:
+            self.nif_entry.configure(border_color=["#979797", "#3d3d3d"]) # default
+            
+        # Highlight ID
+        if len(piece) != 9:
+            self.piece_entry.configure(border_color="red")
+            is_valid = False
+        else:
+            self.piece_entry.configure(border_color=["#979797", "#3d3d3d"]) # default
+            
+        if not is_valid:
+            self.res_lbl.configure(text="Veuillez remplir les informations d'identité (Champs en ROUGE)")
+            return False
+
+        products = list(self.added_products)
+        
+        # Also include currently typed product if valid
+        nature = self.nature_var.get()
+        prix_u = self.products.get(nature, 0)
+        qte = self.safe_float(self.quantite_entry.get())
+        if qte > 0:
+            bon = self.safe_float(self.bon_entry.get())
+            refac = self.safe_float(self.refac_entry.get())
+            montant_avant = qte * prix_u
+            current_brut = montant_avant + (qte * bon) - (qte * refac)
+            
+            products.append({
+                "nature": nature,
+                "quantite": qte,
+                "prix_u": prix_u,
+                "montant_avant_tax": montant_avant,
+                "bon": bon,
+                "refac": refac,
+                "montant_brut": current_brut
+            })
+
+        montant_brut = sum(p["montant_brut"] for p in products)
+        total_weight = sum(p["quantite"] for p in products)
+        
+        # 2. Retenues calcs
+        total_retenues = 0.0
+        retenues_data = []
+        
+        for tax in self.tax_inputs:
+            name = tax["name"]
+            
+            nbre_str = tax["nbre"].get()
+            pu_str = tax["pu"].get()
+            amount_str = tax["amount"].get()
+            
+            nbre = self.safe_float(nbre_str) if nbre_str else None
+            pu = self.safe_float(pu_str) if pu_str else None
+            amount = self.safe_float(amount_str)
+            
+            if name == "taxe pour compte CNA":
+                # CNA is always 15 * total weight
+                tax["nbre"].configure(state="normal")
+                tax["nbre"].delete(0, ctk.END)
+                tax["nbre"].insert(0, f"{total_weight:.2f}")
+                tax["nbre"].configure(state="disabled")
+                
+                tax["pu"].configure(state="normal")
+                tax["pu"].delete(0, ctk.END)
+                tax["pu"].insert(0, "15")
+                tax["pu"].configure(state="disabled")
+                
+                amount = total_weight * 15
+                tax["amount"].configure(state="normal")
+                tax["amount"].delete(0, ctk.END)
+                tax["amount"].insert(0, f"{amount:.2f}")
+                tax["amount"].configure(state="disabled")
+                
+                # Update nbre/pu for data recording
+                nbre, pu = total_weight, 15.0
+                
+            elif name == "taxe pour chambre agricole":
+                # Mixed rates: 5 for Orge, 3 for others
+                has_orge = any("ORGE" in p["nature"].upper() for p in products)
+                has_others = any("ORGE" not in p["nature"].upper() for p in products)
+                
+                # Weight update
+                tax["nbre"].configure(state="normal")
+                tax["nbre"].delete(0, ctk.END)
+                tax["nbre"].insert(0, f"{total_weight:.2f}")
+                tax["nbre"].configure(state="disabled")
+                
+                # P.U Display logic
+                pu_display = "3/5" if (has_orge and has_others) else ("5" if has_orge else "3")
+                tax["pu"].configure(state="normal")
+                tax["pu"].delete(0, ctk.END)
+                tax["pu"].insert(0, pu_display)
+                tax["pu"].configure(state="disabled")
+                
+                # Amount calculation (Weighted Sum)
+                amount = sum(p["quantite"] * (5 if "ORGE" in p["nature"].upper() else 3) for p in products)
+                tax["amount"].configure(state="normal")
+                tax["amount"].delete(0, ctk.END)
+                tax["amount"].insert(0, f"{amount:.2f}")
+                tax["amount"].configure(state="disabled")
+                
+                # Update nbre/pu for data recording
+                nbre = total_weight
+                pu = "3/5" if (has_orge and has_others) else (5.0 if has_orge else 3.0)
+                
+            elif not amount_str and nbre and pu:
+                amount = nbre * pu
+                tax["amount"].delete(0, ctk.END)
+                tax["amount"].insert(0, str(amount))
+                
+            total_retenues += amount
+            retenues_data.append({
+                "name": name,
+                "nbre": nbre,
+                "pu": pu,
+                "amount": amount
+            })
+                
+        montant_net = montant_brut - total_retenues
+        
+        self.res_lbl.configure(text=f"Montant Brut: {montant_brut:.2f} | Total Retenues: {total_retenues:.2f} | Net: {montant_net:.2f}")
+        
+        self._compiled_data = {
+            "products": products,
+            "identity": {
+                "adresse": self.remis_entry.get(),
+                "wilaya": self.wilaya_var.get(),
+                "nif": self.nif_entry.get(),
+                "piece_identite": self.piece_entry.get(),
+                "date": self.date_entry.get(),
+                "decompte": self.decompte_entry.get(),
+                "farmer": self.farmer_entry.get(),
+                "user_account_name": self.username
+            },
+            "retenues": retenues_data,
+            "totals": {
+                "total_retenues": total_retenues,
+                "montant_net": montant_net
+            }
+        }
+        return True
+        
+    def generate(self):
+        if not self.calculate():
+            return
+
+        # 2. Product List Validation
+        if not self.added_products:
+            messagebox.showwarning("Validation", "La liste des produits est vide. Veuillez ajouter au moins un produit avant de générer la facture.", parent=self)
+            return
+
+        # 3. Financial Integrity Validation
+        net = self._compiled_data["totals"]["montant_net"]
+        if net <= 0:
+            messagebox.showwarning("Validation", f"Le montant net ({net:.2f}) est invalide. Veuillez vérifier vos calculs.", parent=self)
+            return
+
+        # 4. Show "Perfect" Preview Window by generating it as a temp file first
+        temp_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp_preview.pdf")
+        try:
+            generate_facture_pdf(self._compiled_data, temp_path)
+            self._temp_pdf_path = temp_path
+            InvoicePreviewWindow(self, temp_path, self.finalize_generation)
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not generate preview: {e}")
+
+    def finalize_generation(self):
+        if not self._compiled_data or not hasattr(self, '_temp_pdf_path'):
+            return
+            
+        try:
+            # Save everything to the SQLite Database without saving final PDF to storage
+            database.save_invoice(self._compiled_data, "")
+            
+            messagebox.showinfo("Success", "Facture enregistrée dans la base de données !", parent=self)
+            
+            # Increment counter
+            self.current_count += 1
+            self.save_count(self.current_count)
+            self.decompte_entry.configure(state="normal")
+            self.decompte_entry.delete(0, 'end')
+            year = datetime.datetime.now().year
+            self.decompte_entry.insert(0, f"{self.current_count}/{year}")
+            self.decompte_entry.configure(state="disabled")
+            
+            # Clean up the temp preview file immediately after saving
+            if hasattr(self, '_temp_pdf_path') and os.path.exists(self._temp_pdf_path):
+                try:
+                    os.remove(self._temp_pdf_path)
+                except:
+                    pass # File might be locked, will be overwritten next time anyway
+        except Exception as e:
+            messagebox.showerror("Error", f"Erreur de finalisation.\n{e}", parent=self)
+
+class LoginFrame(ctk.CTkFrame):
+    def __init__(self, master, on_login_success=None):
+        super().__init__(master, fg_color="transparent")
+        self.on_login_success = on_login_success
+            
+        # Main Frame with slight shadow effect (simulated with border)
+        # Use a fixed width for the login card so it doesn't span the whole screen width
+        self.main_frame = ctk.CTkFrame(self, corner_radius=20, border_width=1, border_color="#d0d0d0", 
+                                        width=500, fg_color="white")
+        self.main_frame.place(relx=0.5, rely=0.5, anchor="center")
+        self.main_frame.pack_propagate(False)
+        self.main_frame.configure(height=750) # Maintain card height
+        
+        # Logo handling
+        try:
+            logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.png")
+            if os.path.exists(logo_path):
+                img = Image.open(logo_path)
+                self.logo_img = ctk.CTkImage(light_image=img, dark_image=img, size=(120, 140))
+                self.logo_label = ctk.CTkLabel(self.main_frame, image=self.logo_img, text="")
+                self.logo_label.pack(pady=(30, 10))
+        except:
+            pass
+            
+        self.title_label = ctk.CTkLabel(self.main_frame, text="Système de Facturation", 
+                                        font=ctk.CTkFont(family="Poppins", size=32, weight="bold"))
+        self.title_label.pack(pady=(10, 40))
+        
+        # Input Container
+        input_container = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+        input_container.pack(pady=10, padx=30, fill="x")
+        
+        ctk.CTkLabel(input_container, text="Nom d'utilisateur", font=ctk.CTkFont(family="Poppins", size=16)).pack(anchor="w", padx=10)
+        self.username_entry = ctk.CTkEntry(input_container, placeholder_text="admin", 
+                                           width=400, height=55, font=ctk.CTkFont(family="Poppins", size=18))
+        self.username_entry.pack(pady=(5, 25))
+        self.username_entry.bind("<Return>", lambda e: self.password_entry.focus())
+        
+        ctk.CTkLabel(input_container, text="Mot de passe", font=ctk.CTkFont(family="Poppins", size=16)).pack(anchor="w", padx=10)
+        self.password_entry = ctk.CTkEntry(input_container, placeholder_text="••••••••", 
+                                           show="*", width=400, height=55, font=ctk.CTkFont(family="Poppins", size=18))
+        self.password_entry.pack(pady=(5, 25))
+        self.password_entry.bind("<Return>", lambda e: self.login())
+        
+        # Login Button
+        self.login_btn = ctk.CTkButton(self.main_frame, text="SE CONNECTER", command=self.login, 
+                                        width=400, height=65, font=ctk.CTkFont(family="Poppins", size=22, weight="bold"),
+                                        fg_color="#1f538d", hover_color="#163e66", corner_radius=15)
+        self.login_btn.pack(pady=(40, 20), padx=20)
+        
+        # Footer
+        self.footer = ctk.CTkLabel(self.main_frame, text="© 2026 CCLS Ouargla - Sécurisé", 
+                                   font=ctk.CTkFont(family="Poppins", size=14, slant="italic"), text_color="gray")
+        self.footer.pack(side="bottom", pady=20)
+
+        # Initial Focus
+        self.after(200, lambda: self.username_entry.focus())
+
+    def login(self):
+        username = self.username_entry.get().strip()
+        password = self.password_entry.get().strip()
+        
+        if not username or not password:
+            messagebox.showwarning("Attention", "Veuillez remplir tous les champs.")
+            return
+            
+        success, role = database.verify_login(username, password)
+        if success:
+            if self.on_login_success:
+                self.on_login_success(username, role)
+        else:
+            messagebox.showerror("Erreur", "Nom d'utilisateur ou mot de passe incorrect.")
+            self.password_entry.delete(0, 'end')
+    
+
+class MainApplication(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        self.title("Système de Facturation CCLS")
+        
+        # Start maximized for full-screen experience
+        self.after(0, lambda: self.state('zoomed'))
+        self.resizable(True, True)
+        
+        self.container = ctk.CTkFrame(self, fg_color="transparent")
+        self.container.pack(fill="both", expand=True)
+        
+        # Apply screenshot protection once to the root window (HWND)
+        try:
+            hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
+            ctypes.windll.user32.SetWindowDisplayAffinity(hwnd, 0x11)
+        except:
+            pass
+            
+        self.show_login()
+
+    def show_login(self):
+        """Swaps content to the login frame without changing the window."""
+        for widget in self.container.winfo_children():
+            widget.destroy()
+            
+        self.title("CCLS - Authentification")
+        frame = LoginFrame(self.container, on_login_success=self.show_app)
+        frame.pack(fill="both", expand=True)
+
+    def show_app(self, username, role):
+        """Swaps content to the app frame without changing the window."""
+        self.current_user = {"username": username, "role": role}
+        for widget in self.container.winfo_children():
+            widget.destroy()
+            
+        self.title(f"CCLS Facture - Connecté: {username.upper()}")
+        frame = AppFrame(self.container, username=username, role=role, on_disconnect=self.show_login)
+        frame.pack(fill="both", expand=True)
+
+    def show_history(self, username, role):
+        """Swaps content to the history frame."""
+        for widget in self.container.winfo_children():
+            widget.destroy()
+            
+        self.title("CCLS Facture - 📜 Historique")
+        frame = HistoryFrame(self.container, username=username, on_back=lambda: self.show_app(username, role))
+        frame.pack(fill="both", expand=True)
+
+    def _center_window(self, width, height):
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        x, y = (sw // 2) - (width // 2), (sh // 2) - (height // 2)
+        self.geometry(f"{width}x{height}+{max(0, x)}+{max(0, y)}")
+
+
+if __name__ == "__main__":
+    database.init_db()
+    app = MainApplication()
+    app.mainloop()

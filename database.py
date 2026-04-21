@@ -36,7 +36,8 @@ def init_db():
         ("total_avant_taxes", "REAL DEFAULT 0.0"),
         ("total_bonification", "REAL DEFAULT 0.0"),
         ("total_refaction", "REAL DEFAULT 0.0"),
-        ("wilaya", "TEXT")
+        ("wilaya", "TEXT"),
+        ("payment_status", "TEXT DEFAULT 'Non Payé'")
     ]
     
     for col_name, col_type in new_cols:
@@ -96,6 +97,17 @@ def init_db():
     if "role" not in user_cols:
         cursor.execute("ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'user'")
     
+    # Settings table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    ''')
+    
+    # Initialize default settings
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('max_products_per_invoice', '5')")
+    
     # Check if admin user exists, if not create default
     cursor.execute("SELECT * FROM users WHERE username = 'admin'")
     if not cursor.fetchone():
@@ -116,6 +128,12 @@ def init_db():
             ("Tretical", 4300)
         ]
         cursor.executemany("INSERT INTO products_metadata (name, price) VALUES (?, ?)", initial_products)
+
+    # --- PERFORMANCE INDEXES (Lag Fix) ---
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_invoices_wilaya ON invoices(wilaya)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(payment_status)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_invoices_farmer ON invoices(farmer_name)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_products_nature ON products(nature)")
 
     conn.commit()
     conn.close()
@@ -201,8 +219,8 @@ def save_invoice(data, pdf_path):
     finally:
         conn.close()
 
-def get_all_invoices(query=None, wilaya="Tous", product="Tous"):
-    """Fetches all invoices, optionally filtered by search text, wilaya, and product."""
+def get_all_invoices(query=None, wilaya="Tous", product="Tous", status="Tous"):
+    """Fetches all invoices, optionally filtered by search text, wilaya, product, and status."""
     conn = sqlite3.connect("invoices.db")
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
@@ -219,11 +237,14 @@ def get_all_invoices(query=None, wilaya="Tous", product="Tous"):
     if product != "Tous":
         where_clauses.append("id IN (SELECT invoice_id FROM products WHERE nature = ?)")
         params.append(product)
+    if status != "Tous":
+        where_clauses.append("payment_status = ?")
+        params.append(status)
         
     where_sql = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
     
     try:
-        cursor.execute(f"SELECT * FROM invoices {where_sql} ORDER BY created_at DESC", params)
+        cursor.execute(f"SELECT * FROM invoices {where_sql} ORDER BY created_at DESC LIMIT 150", params)
         rows = cursor.fetchall()
         return rows
     except Exception as e:
@@ -255,6 +276,7 @@ def get_invoice_details(invoice_id):
                 "decompte": inv_row["decompte"],
                 "farmer": inv_row["farmer_name"]
             },
+            "status": inv_row["payment_status"],
             "totals": {
                 "total_retenues": inv_row["total_retenues"],
                 "montant_net": inv_row["total_net"]
@@ -295,8 +317,8 @@ def get_invoice_details(invoice_id):
     finally:
         conn.close()
 
-def get_filtered_totals(query=None, wilaya="Tous", product="Tous"):
-    """Calculates grand totals for a set of invoices filtered by search, wilaya, and product."""
+def get_filtered_totals(query=None, wilaya="Tous", product="Tous", status="Tous"):
+    """Calculates grand totals for a set of invoices filtered by search, wilaya, product, and status."""
     conn = sqlite3.connect("invoices.db")
     cursor = conn.cursor()
     
@@ -312,6 +334,9 @@ def get_filtered_totals(query=None, wilaya="Tous", product="Tous"):
     if product != "Tous":
         where_clauses.append("id IN (SELECT invoice_id FROM products WHERE nature = ?)")
         params.append(product)
+    if status != "Tous":
+        where_clauses.append("payment_status = ?")
+        params.append(status)
         
     where_sql = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
     inner_id_query = f"SELECT id FROM invoices {where_sql}"
@@ -324,7 +349,9 @@ def get_filtered_totals(query=None, wilaya="Tous", product="Tous"):
                 SUM(total_bonification), 
                 SUM(total_refaction),
                 SUM(total_retenues), 
-                SUM(total_net) 
+                SUM(total_net),
+                SUM(CASE WHEN payment_status = 'Payé' THEN total_net ELSE 0 END),
+                SUM(CASE WHEN payment_status != 'Payé' THEN total_net ELSE 0 END)
             FROM invoices 
             WHERE id IN ({inner_id_query})
         ''', params)
@@ -336,15 +363,17 @@ def get_filtered_totals(query=None, wilaya="Tous", product="Tous"):
             "total_bon": sums[1] or 0.0,
             "total_refac": sums[2] or 0.0,
             "total_retenues": sums[3] or 0.0,
-            "total_net": sums[4] or 0.0
+            "total_net": sums[4] or 0.0,
+            "total_net_paye": sums[5] or 0.0,
+            "total_net_non_paye": sums[6] or 0.0
         }
     except Exception as e:
         print(f"[DB ERROR] Calc failed: {e}")
-        return {k: 0.0 for k in ["total_avant", "total_bon", "total_refac", "total_retenues", "total_net"]}
+        return {k: 0.0 for k in ["total_avant", "total_bon", "total_refac", "total_retenues", "total_net", "total_net_paye", "total_net_non_paye"]}
     finally:
         conn.close()
 
-def get_grouped_accumulation(query=None, wilaya="Tous", product="Tous"):
+def get_grouped_accumulation(query=None, wilaya="Tous", product="Tous", status="Tous"):
     """Retrieves totals grouped by product nature, respecting all filters."""
     conn = sqlite3.connect("invoices.db")
     cursor = conn.cursor()
@@ -361,6 +390,9 @@ def get_grouped_accumulation(query=None, wilaya="Tous", product="Tous"):
     if product != "Tous":
         where_clauses.append("i.id IN (SELECT invoice_id FROM products WHERE nature = ?)")
         params.append(product)
+    if status != "Tous":
+        where_clauses.append("i.payment_status = ?")
+        params.append(status)
         
     where_sql = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
 
@@ -396,6 +428,20 @@ def get_grouped_accumulation(query=None, wilaya="Tous", product="Tous"):
     except Exception as e:
         print(f"[DB ERROR] Grouped calc failed: {e}")
         return []
+    finally:
+        conn.close()
+
+def update_payment_status(invoice_id, status):
+    """Updates the payment_status of a specific invoice."""
+    conn = sqlite3.connect("invoices.db")
+    cursor = conn.cursor()
+    try:
+        cursor.execute("UPDATE invoices SET payment_status = ? WHERE id = ?", (status, invoice_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"[DB ERROR] Status update failed: {e}")
+        return False
     finally:
         conn.close()
 def verify_login(username, password):
@@ -461,7 +507,7 @@ def add_db_product(name, price):
     conn = sqlite3.connect("invoices.db")
     cursor = conn.cursor()
     try:
-        cursor.execute("INSERT INTO products_metadata (name, price) VALUES (?, ?)", (name, price))
+        cursor.execute("INSERT OR REPLACE INTO products_metadata (name, price) VALUES (?, ?)", (name, price))
         conn.commit()
         return True
     except:
@@ -476,3 +522,24 @@ def delete_db_product(name):
     conn.commit()
     conn.close()
     return True
+
+# --- SETTINGS MANAGEMENT ---
+def get_setting(key, default=None):
+    conn = sqlite3.connect("invoices.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else default
+
+def set_setting(key, value):
+    conn = sqlite3.connect("invoices.db")
+    cursor = conn.cursor()
+    try:
+        cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
+        conn.commit()
+        return True
+    except:
+        return False
+    finally:
+        conn.close()

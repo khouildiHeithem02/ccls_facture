@@ -42,20 +42,20 @@ class InvoicePreviewWindow(ctk.CTkToplevel):
         
         if self.mode == "creation":
             self.btn_print = ctk.CTkButton(btn_frame, text="🖨️ Imprimer & Enregistrer", command=self.confirm_and_close,
-                                           fg_color="green", font=ctk.CTkFont(family="Poppins", size=15, weight="bold"), height=45)
+                                           fg_color="#2E7D32", font=ctk.CTkFont(family="Poppins", size=15, weight="bold"), height=45)
             self.btn_print.pack(side="left", expand=True, padx=10)
             
-            self.btn_cancel = ctk.CTkButton(btn_frame, text="❌ CANCEL", command=self.on_cancel,
+            self.btn_cancel = ctk.CTkButton(btn_frame, text="❌ ANNULER", command=self.on_cancel,
                                              fg_color="#C62828", font=ctk.CTkFont(family="Poppins", size=15), height=45)
             self.btn_cancel.pack(side="right", expand=True, padx=10)
         else:
-            # View-only / History mode
-            self.btn_print = ctk.CTkButton(btn_frame, text="🖨️ PRINT / OPEN FILE", command=lambda: os.startfile(self.pdf_path),
-                                           fg_color="#1976D2", font=ctk.CTkFont(family="Poppins", size=15, weight="bold"), height=45)
+            # View-only / History mode - Now looks identical to creation mode
+            self.btn_print = ctk.CTkButton(btn_frame, text="🖨️ IMPRIMER / OUVRIR", command=lambda: os.startfile(self.pdf_path) if os.path.exists(self.pdf_path) else None,
+                                           fg_color="#2E7D32", font=ctk.CTkFont(family="Poppins", size=15, weight="bold"), height=45)
             self.btn_print.pack(side="left", expand=True, padx=10)
             
-            self.btn_close = ctk.CTkButton(btn_frame, text="Fermer", command=self.on_cancel,
-                                           fg_color="gray", font=ctk.CTkFont(family="Poppins", size=15), height=45)
+            self.btn_close = ctk.CTkButton(btn_frame, text="❌ FERMER", command=self.on_cancel,
+                                           fg_color="#C62828", font=ctk.CTkFont(family="Poppins", size=15), height=45)
             self.btn_close.pack(side="right", expand=True, padx=10)
 
         # Scrollable area for the image (Takes remaining space)

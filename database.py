@@ -37,7 +37,8 @@ def init_db():
         ("total_bonification", "REAL DEFAULT 0.0"),
         ("total_refaction", "REAL DEFAULT 0.0"),
         ("wilaya", "TEXT"),
-        ("payment_status", "TEXT DEFAULT 'Non Payé'")
+        ("payment_status", "TEXT DEFAULT 'Non Payé'"),
+        ("created_by", "TEXT")
     ]
     
     for col_name, col_type in new_cols:
@@ -162,8 +163,8 @@ def save_invoice(data, pdf_path):
                 decompte, date, farmer_name, farmer_address, wilaya,
                 farmer_nif, farmer_id_piece, total_brut, 
                 total_retenues, total_net, total_avant_taxes,
-                total_bonification, total_refaction, pdf_path
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                total_bonification, total_refaction, pdf_path, created_by
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             ident.get('decompte'),
             ident.get('date'),
@@ -178,7 +179,8 @@ def save_invoice(data, pdf_path):
             total_avant,
             total_bon,
             total_refac,
-            pdf_path
+            pdf_path,
+            ident.get('user_account_name')
         ))
         
         invoice_id = cursor.lastrowid
@@ -274,7 +276,8 @@ def get_invoice_details(invoice_id):
                 "piece_identite": inv_row["farmer_id_piece"],
                 "date": inv_row["date"],
                 "decompte": inv_row["decompte"],
-                "farmer": inv_row["farmer_name"]
+                "farmer": inv_row["farmer_name"],
+                "user_account_name": inv_row["created_by"]
             },
             "status": inv_row["payment_status"],
             "totals": {

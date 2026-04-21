@@ -8,6 +8,8 @@ import arabic_reshaper
 from bidi.algorithm import get_display
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+from config import TAXES_LIST
+import math
 
 def generate_facture_pdf(data, output_path):
     doc = SimpleDocTemplate(
@@ -191,6 +193,15 @@ de Ouargla"""
 
     # --- RIGHT SIDE ---
     retenues = data.get('retenues', [])
+    provided_retenues = {r['name']: r for r in retenues}
+    
+    # Calculate defaults for empty rows
+    products = data.get('products', [])
+    total_weight = sum(p.get('quantite', 0) for p in products)
+    has_orge = any("ORGE" in p.get('nature', '').upper() for p in products)
+    has_other = any("ORGE" not in p.get('nature', '').upper() and p.get('nature') for p in products)
+    ch_agri_pu = "3/5" if (has_orge and has_other) else ("5" if has_orge else "3")
+
     right_cols = [4.5*cm, 2*cm, 2*cm, 2.5*cm]
     
     # Header for retenues
@@ -201,15 +212,34 @@ de Ouargla"""
          ""]
     ]
     
-    for r in retenues:
-        nbre_str = f"{r.get('nbre', 0):.2f}" if r.get('nbre') else ""
-        pu_val = r.get('pu', 0)
-        pu_str = f"{pu_val:.2f}" if isinstance(pu_val, (int, float)) else str(pu_val)
+    for tax_name in TAXES_LIST:
+        r = provided_retenues.get(tax_name)
+        if r:
+            nbre_val = r.get('nbre')
+            nbre_str = f"{nbre_val:.2f}" if (isinstance(nbre_val, (int, float)) and nbre_val > 0) else (str(nbre_val) if nbre_val else "")
+            
+            pu_val = r.get('pu', 0)
+            pu_str = str(pu_val) if not isinstance(pu_val, (int, float)) else f"{pu_val:.2f}"
+            amount_str = f"{r.get('amount', 0):.2f}"
+        else:
+            # Tax not found in data (was 0 and not saved, or just not selected)
+            # We fill it with standard defaults to match the main page look
+            amount_str = "0.00"
+            if tax_name == "taxe pour compte CNA":
+                nbre_str = f"{total_weight:.2f}"
+                pu_str = "15"
+            elif tax_name == "taxe pour chambre agricole" and total_weight > 0:
+                nbre_str = f"{total_weight:.2f}"
+                pu_str = ch_agri_pu
+            else:
+                nbre_str = ""
+                pu_str = ""
+                
         right_data.append([
-            r['name'],
+            tax_name,
             nbre_str,
             pu_str,
-            f"{r['amount']:.2f}"
+            amount_str
         ])
     
     # Space before totals

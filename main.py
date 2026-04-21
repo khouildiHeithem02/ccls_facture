@@ -13,8 +13,9 @@ class MainApplication(ctk.CTk):
         super().__init__()
         self.title("Système de Facturation CCLS")
         
-        # Start maximized for full-screen experience
-        self.after(0, lambda: self.state('zoomed'))
+        # Set a large initial size and start maximized
+        self.geometry("1400x900")
+        self.state('zoomed')
         self.resizable(True, True)
         
         # HWID Container for shared state
@@ -30,14 +31,6 @@ class MainApplication(ctk.CTk):
         # Frame Cache
         self.frames = {}
         
-        # Apply screenshot protection once to the root window (HWND)
-        try:
-            hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
-            # WDA_EXCLUDEFROMCAPTURE = 0x11
-            ctypes.windll.user32.SetWindowDisplayAffinity(hwnd, 0x11)
-        except:
-            pass
-            
         self.show_login()
 
     def show_login(self):
@@ -55,7 +48,7 @@ class MainApplication(ctk.CTk):
         login_frame.tkraise()
 
     def on_login_complete(self, username, role):
-        """Callback from LoginFrame: Sets user and prepares dashboard/history."""
+        """Callback from LoginFrame: Sets user and prepares dashboard only (Lazy Loading)."""
         self.username = username
         self.role = role
         
@@ -64,21 +57,15 @@ class MainApplication(ctk.CTk):
             self.frames["login"].destroy()
             del self.frames["login"]
             
-        # Create App and History frames ONCE (Caching)
+        # Create ONLY the dashboard initially for maximum speed
         self.title(f"CCLS Facture - Connecté: {username.upper()}")
         
-        # Dashboard
         self.frames["dashboard"] = AppFrame(self.container, username=username, role=role, 
                                            on_disconnect=self.show_login, 
                                            on_show_history=self.show_history)
         self.frames["dashboard"].grid(row=0, column=0, sticky="nsew")
         
-        # History
-        self.frames["history"] = HistoryFrame(self.container, username=username, 
-                                             on_back=self.show_dashboard)
-        self.frames["history"].grid(row=0, column=0, sticky="nsew")
-        
-        # Show dashboard initially
+        # Show dashboard immediately
         self.show_dashboard()
 
     def show_dashboard(self):
@@ -86,18 +73,29 @@ class MainApplication(ctk.CTk):
         self.title(f"CCLS Facture - Connecté: {self.username.upper()}")
         if "dashboard" in self.frames:
             self.frames["dashboard"].tkraise()
-            # Reload products in case they changed in admin panel
-            self.frames["dashboard"].reload_products()
 
     def show_history(self, *args):
-        """Instantly switch to history."""
+        """Lazy load and switch to history."""
         self.title("CCLS Facture - 📜 Historique")
-        if "history" in self.frames:
-            # Refresh list before showing to ensure latest data
-            self.frames["history"].refresh_list()
-            self.frames["history"].tkraise()
-
+        
+        # Initialize history frame only on first request
+        if "history" not in self.frames:
+            self.frames["history"] = HistoryFrame(self.container, username=self.username, 
+                                                 on_back=self.show_dashboard)
+            self.frames["history"].grid(row=0, column=0, sticky="nsew")
+        
+        # Refresh list and show
+        self.frames["history"].refresh_list()
+        self.frames["history"].tkraise()
 if __name__ == "__main__":
+    # Ensure database is initialized once at the very start
     database.init_db()
+    
+    # Show premium splash screen
+    from ui.windows.splash_screen import SplashScreen
+    splash = SplashScreen()
+    splash.mainloop()
+    
+    # Start the main application
     app = MainApplication()
     app.mainloop()

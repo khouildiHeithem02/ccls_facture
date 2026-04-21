@@ -1,4 +1,5 @@
 import customtkinter as ctk
+import tkinter as tk
 import os
 import ctypes
 from tkinter import messagebox
@@ -13,6 +14,9 @@ class HistoryFrame(ctk.CTkFrame):
         super().__init__(master, fg_color="transparent")
         self.username = username
         self.on_back = on_back
+        self.current_page = 0
+        self.page_size = 15
+        self.all_invoices = []
         
         # Identity Search
         filter_frame = ctk.CTkFrame(self)
@@ -22,13 +26,6 @@ class HistoryFrame(ctk.CTkFrame):
         btn_back = ctk.CTkButton(filter_frame, text="⬅ Retour", width=100, command=self._go_back, fg_color="#607D8B")
         btn_back.pack(side="left", padx=(0, 20))
         
-        # Prevent screenshots for history too
-        try:
-            hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
-            ctypes.windll.user32.SetWindowDisplayAffinity(hwnd, 0x11)
-        except:
-            pass
-
         # Filter Bar (Horizontal)
         filters_container = ctk.CTkFrame(self)
         filters_container.pack(fill="x", padx=20, pady=10)
@@ -85,6 +82,22 @@ class HistoryFrame(ctk.CTkFrame):
         self.list_frame = ctk.CTkScrollableFrame(self)
         self.list_frame.pack(fill="both", expand=True, padx=20, pady=(10, 0))
         
+        # Pagination Bar (Guarantees zero lag by limiting widget count)
+        self.pagination_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.pagination_frame.pack(fill="x", padx=20, pady=5)
+        
+        self.btn_prev = ctk.CTkButton(self.pagination_frame, text="⬅ Précédent", width=120, height=35,
+                                      command=self.prev_page, state="disabled")
+        self.btn_prev.pack(side="left", padx=10)
+        
+        self.page_info_lbl = ctk.CTkLabel(self.pagination_frame, text="Page 1 / 1", 
+                                          font=ctk.CTkFont(family="Poppins", size=14, weight="bold"))
+        self.page_info_lbl.pack(side="left", expand=True)
+        
+        self.btn_next = ctk.CTkButton(self.pagination_frame, text="Suivant ➡", width=120, height=35,
+                                      command=self.next_page, state="disabled")
+        self.btn_next.pack(side="right", padx=10)
+        
         # Accumulate area (Bottom)
         self.accum_frame = ctk.CTkFrame(self, fg_color="#f8f9fa")
         self.accum_frame.pack(fill="x", padx=20, pady=10)
@@ -103,7 +116,7 @@ class HistoryFrame(ctk.CTkFrame):
                                        font=ctk.CTkFont(family="Poppins", size=14, slant="italic"), text_color="gray")
         self.status_bar.pack(pady=10)
         
-        self.refresh_list()
+        self.after(50, self.refresh_list)
 
     def _go_back(self):
         if self.on_back:
@@ -130,8 +143,11 @@ class HistoryFrame(ctk.CTkFrame):
             
         AccumulationWindow(self, data_grouped, grand_totals)
 
-    def refresh_list(self):
+    def refresh_list(self, reset_page=True):
         """Fetches data and starts the chunked rendering process to keep UI responsive."""
+        if reset_page:
+            self.current_page = 0
+            
         # Cancel any current background rendering loop
         self._current_render_id = getattr(self, "_current_render_id", 0) + 1
         render_id = self._current_render_id
@@ -154,30 +170,53 @@ class HistoryFrame(ctk.CTkFrame):
         self.after(10, lambda: self._fetch_and_start_render(query, wilaya, product, status_filter, render_id))
 
     def _fetch_and_start_render(self, query, wilaya, product, status_filter, render_id):
-        if render_id != self._current_render_id: return
-        
-        invoices = database.get_all_invoices(query if query else None, wilaya, product, status_filter)
+        self.all_invoices = database.get_all_invoices(query if query else None, wilaya, product, status_filter)
         
         if hasattr(self, "loading_lbl") and self.loading_lbl.winfo_exists():
             self.loading_lbl.destroy()
         
-        if not invoices:
-            ctk.CTkLabel(self.list_frame, text="Aucune facture trouvée.", 
-                         font=ctk.CTkFont(family="Poppins", size=16, slant="italic")).pack(pady=30)
+        if not self.all_invoices:
+            tk.Label(self.list_frame, text="Aucune facture trouvée.", bg="white",
+                     font=("Poppins", 14), fg="gray").pack(pady=30)
+            self._update_pagination_buttons(0)
             return
 
-        self._render_chunk(invoices, 0, render_id)
+        self._update_pagination_buttons(len(self.all_invoices))
+        self._render_page(render_id)
 
-    def _render_chunk(self, data, start_index, render_id):
+    def _update_pagination_buttons(self, total_count):
+        total_pages = max(1, (total_count + self.page_size - 1) // self.page_size)
+        self.page_info_lbl.configure(text=f"Page {self.current_page + 1} / {total_pages} ({total_count} invoices)")
+        
+        self.btn_prev.configure(state="normal" if self.current_page > 0 else "disabled")
+        self.btn_next.configure(state="normal" if (self.current_page + 1) * self.page_size < total_count else "disabled")
+
+    def prev_page(self):
+        if self.current_page > 0:
+            self.current_page -= 1
+            self.refresh_list(reset_page=False)
+
+    def next_page(self):
+        if (self.current_page + 1) * self.page_size < len(self.all_invoices):
+            self.current_page += 1
+            self.refresh_list(reset_page=False)
+
+    def _render_page(self, render_id):
+        if render_id != self._current_render_id: return
+        
+        start_idx = self.current_page * self.page_size
+        end_idx = min(start_idx + self.page_size, len(self.all_invoices))
+        
+        self._render_chunk(self.all_invoices, start_idx, end_idx, render_id)
+
+    def _render_chunk(self, data, start_index, page_end, render_id):
         # Stop if a newer refresh started
         if render_id != self._current_render_id:
             return
             
-        # Render 10 rows at a time
-        chunk_size = 10
-        end_index = min(start_index + chunk_size, len(data))
-        
-        r_font = ctk.CTkFont(family="Poppins", size=14)
+        # Render a small sub-chunk to keep UI responsive
+        chunk_size = 5
+        end_index = min(start_index + chunk_size, page_end)
         
         for i in range(start_index, end_index):
             inv = data[i]
@@ -188,37 +227,37 @@ class HistoryFrame(ctk.CTkFrame):
             net = inv["total_net"]
             status_val = inv["payment_status"]
             
-            row_frame = ctk.CTkFrame(self.list_frame, fg_color="white", border_width=1, border_color="#eeeeee")
-            row_frame.pack(fill="x", pady=4, padx=5)
+            # Use native tk.Frame for the row container (ultra-lightweight)
+            row_frame = tk.Frame(self.list_frame, bg="white", highlightthickness=1, highlightbackground="#eeeeee")
+            row_frame.pack(fill="x", pady=1, padx=5)
             
-            ctk.CTkLabel(row_frame, text=dec, width=120, font=r_font).grid(row=0, column=0, padx=5)
-            ctk.CTkLabel(row_frame, text=dt, width=120, font=r_font).grid(row=0, column=1, padx=5)
-            ctk.CTkLabel(row_frame, text=name, width=300, anchor="w", font=r_font).grid(row=0, column=2, padx=5)
-            ctk.CTkLabel(row_frame, text=f"{net:,.2f} DA", width=150, text_color="#2E7D32", font=ctk.CTkFont(family="Poppins", size=14, weight="bold")).grid(row=0, column=3, padx=5)
+            # Use native tk.Label with fixed widths for ultra-smooth scrolling
+            tk.Label(row_frame, text=dec, width=15, font=("Poppins", 10), bg="white", fg="black").grid(row=0, column=0, padx=5, pady=5)
+            tk.Label(row_frame, text=dt, width=15, font=("Poppins", 10), bg="white", fg="black").grid(row=0, column=1, padx=5, pady=5)
+            tk.Label(row_frame, text=name, width=40, anchor="w", font=("Poppins", 10), bg="white", fg="black").grid(row=0, column=2, padx=5, pady=5)
+            tk.Label(row_frame, text=f"{net:,.2f} DA", width=18, font=("Poppins", 10, "bold"), bg="white", fg="#2E7D32").grid(row=0, column=3, padx=5, pady=5)
             
             status_color = "#2E7D32" if status_val == "Payé" else "#C62828"
             display_stat = f"🟢 {status_val}" if status_val == "Payé" else f"🔴 {status_val}"
-            status_lbl = ctk.CTkLabel(row_frame, text=display_stat, width=120, text_color=status_color, font=r_font)
-            status_lbl.grid(row=0, column=4, padx=5)
+            status_lbl = tk.Label(row_frame, text=display_stat, width=15, font=("Poppins", 10), bg="white", fg=status_color)
+            status_lbl.grid(row=0, column=4, padx=5, pady=5)
             
-            actions_frame = ctk.CTkFrame(row_frame, fg_color="transparent")
-            actions_frame.grid(row=0, column=5, padx=5)
-            
-            btn_view = ctk.CTkButton(actions_frame, text="👁️ Voir", width=80, height=32, 
+            # Pack buttons directly into row_frame to reduce widget count
+            btn_view = ctk.CTkButton(row_frame, text="👁️ Voir", width=80, height=30, 
                                      font=ctk.CTkFont(family="Poppins", size=13),
                                      command=lambda i_id=inv_id: self.view_pdf(i_id))
-            btn_view.pack(side="left", padx=5)
+            btn_view.grid(row=0, column=5, padx=5, pady=2, sticky="w")
             
             toggle_text = "💳 Payer" if status_val != "Payé" else "❌ Annuler"
             toggle_color = "#1976D2" if status_val != "Payé" else "#757575"
-            btn_toggle = ctk.CTkButton(actions_frame, text=toggle_text, width=80, height=32, 
+            btn_toggle = ctk.CTkButton(row_frame, text=toggle_text, width=80, height=30, 
                                        fg_color=toggle_color, font=ctk.CTkFont(family="Poppins", size=13))
             btn_toggle.configure(command=lambda i_id=inv_id, s_lbl=status_lbl, btn=btn_toggle: self.toggle_status(i_id, s_lbl, btn))
-            btn_toggle.pack(side="left", padx=5)
+            btn_toggle.grid(row=0, column=6, padx=(5, 10), pady=2, sticky="w")
 
-        # Schedule next chunk if there's more data
-        if end_index < len(data):
-            self.after(5, lambda: self._render_chunk(data, end_index, render_id))
+        # Schedule next sub-chunk if within the same page
+        if end_index < page_end:
+            self.after(2, lambda: self._render_chunk(data, end_index, page_end, render_id))
 
     def toggle_status(self, inv_id, status_lbl, btn_toggle):
         def do_toggle():
@@ -227,7 +266,7 @@ class HistoryFrame(ctk.CTkFrame):
             if database.update_payment_status(inv_id, new_status):
                 new_color = "#2E7D32" if new_status == "Payé" else "#C62828"
                 new_display = f"🟢 {new_status}" if new_status == "Payé" else f"🔴 {new_status}"
-                status_lbl.configure(text=new_display, text_color=new_color)
+                status_lbl.configure(text=new_display, fg=new_color)
                 btn_toggle.configure(text="❌ Annuler" if new_status == "Payé" else "💳 Payer", 
                                      fg_color="#757575" if new_status == "Payé" else "#1976D2")
         PasswordDialog(self, title="Validation Requise", on_success=do_toggle)

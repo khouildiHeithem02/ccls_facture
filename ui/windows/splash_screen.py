@@ -24,8 +24,14 @@ class SplashScreen(ctk.CTk):
         self.container.place(relx=0.5, rely=0.5, anchor="center")
         
         # Logo
-        logo_path = os.path.join(os.getcwd(), "logo.png")
-        if os.path.exists(logo_path):
+        logo_path = None
+        for ext in [".png", ".jpg", ".jpeg"]:
+            test_path = os.path.join(os.getcwd(), f"logo{ext}")
+            if os.path.exists(test_path):
+                logo_path = test_path
+                break
+                
+        if logo_path:
             logo_img = ctk.CTkImage(light_image=Image.open(logo_path), 
                                     dark_image=Image.open(logo_path), 
                                     size=(300, 350))

@@ -67,8 +67,15 @@ de Ouargla"""
 {reshaped_arabic("تعاونية الحبوب والبقول الجافة")}<br/>
 {reshaped_arabic("ولاية ورقلة")}"""
 
-    logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logo.png')
-    if os.path.exists(logo_path):
+    logo_path = None
+    dir_path = os.path.dirname(os.path.abspath(__file__))
+    for ext in ['.png', '.jpg', '.jpeg']:
+        test_path = os.path.join(dir_path, f'logo{ext}')
+        if os.path.exists(test_path):
+            logo_path = test_path
+            break
+
+    if logo_path:
         header_logo = Image(logo_path, width=2.5*cm, height=3*cm)
     else:
         # Placeholder if no logo is found

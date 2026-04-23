@@ -5,11 +5,11 @@ import ctypes
 from PIL import Image
 
 class InvoicePreviewWindow(ctk.CTkToplevel):
-    def __init__(self, parent, pdf_path, on_confirm=None, mode="creation"):
+    def __init__(self, parent, pdf_path, on_confirm=None, mode="creation", on_cancel=None):
         super().__init__(parent)
         self.title("Invoice Preview (Exact Layout)")
         
-        # Center horizontally, but pull to top horizontally so bottom buttons aren't cut off
+        # ... (geometry logic kept same)
         w = 850
         h = 700
         try:
@@ -21,6 +21,7 @@ class InvoicePreviewWindow(ctk.CTkToplevel):
         self.resizable(True, True)
         self.lift()
         self.on_confirm = on_confirm
+        self.on_cancel_callback = on_cancel
         self.pdf_path = pdf_path
         self.mode = mode
         
@@ -92,6 +93,10 @@ class InvoicePreviewWindow(ctk.CTkToplevel):
                 os.remove(self.pdf_path)
         except:
             pass
+        
+        if self.on_cancel_callback:
+            self.on_cancel_callback()
+            
         self.destroy()
 
     def _apply_protection(self):

@@ -248,6 +248,121 @@ def save_invoice(data, pdf_path):
     finally:
         conn.close()
 
+def delete_invoice_related_data(cursor, invoice_id):
+    """Internal helper to clear related products/receipts/retenues before update."""
+    # 1. Get product IDs to delete receipts
+    cursor.execute("SELECT id FROM products WHERE invoice_id = ?", (invoice_id,))
+    product_ids = [row[0] for row in cursor.fetchall()]
+    
+    if product_ids:
+        # Delete receipts for these products
+        placeholders = ', '.join(['?'] * len(product_ids))
+        cursor.execute(f"DELETE FROM product_receipts WHERE product_id IN ({placeholders})", product_ids)
+    
+    # 2. Delete products
+    cursor.execute("DELETE FROM products WHERE invoice_id = ?", (invoice_id,))
+    
+    # 3. Delete retenues
+    cursor.execute("DELETE FROM retenues WHERE invoice_id = ?", (invoice_id,))
+
+def update_invoice_full(invoice_id, data, pdf_path):
+    """Updates an existing invoice by replacing all related data and updating totals."""
+    conn = sqlite3.connect("invoices.db")
+    cursor = conn.cursor()
+    
+    try:
+        ident = data.get('identity', {})
+        totals = data.get('totals', {})
+        products_list = data.get('products', [])
+        retenues_list = data.get('retenues', [])
+        
+        # Calculate Financial Breakdowns
+        total_brut = sum(float(p.get('montant_brut', 0)) for p in products_list)
+        total_avant = sum(float(p.get('quantite', 0)) * float(p.get('prix_u', 0)) for p in products_list)
+        total_bon = sum(float(p.get('quantite', 0)) * float(p.get('bon', 0)) for p in products_list)
+        total_refac = sum(float(p.get('quantite', 0)) * float(p.get('refac', 0)) for p in products_list)
+        
+        # 1. Update Main Invoice Record
+        cursor.execute('''
+            UPDATE invoices SET 
+                date = ?, farmer_name = ?, farmer_address = ?, wilaya = ?,
+                farmer_nif = ?, farmer_id_piece = ?, total_brut = ?, 
+                total_retenues = ?, total_net = ?, total_avant_taxes = ?,
+                total_bonification = ?, total_refaction = ?, pdf_path = ?
+            WHERE id = ?
+        ''', (
+            ident.get('date'),
+            ident.get('farmer'),
+            ident.get('adresse'),
+            ident.get('wilaya'),
+            ident.get('nif'),
+            ident.get('piece_identite'),
+            total_brut,
+            totals.get('total_retenues', 0),
+            totals.get('montant_net', 0),
+            total_avant,
+            total_bon,
+            total_refac,
+            pdf_path,
+            invoice_id
+        ))
+        
+        # 2. Clear old related data
+        delete_invoice_related_data(cursor, invoice_id)
+        
+        # 3. Insert new products and receipts
+        for p in products_list:
+            cursor.execute('''
+                INSERT INTO products (
+                    invoice_id, nature, quantite, prix_u, bon, refac, montant_brut
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                invoice_id,
+                p.get('nature'),
+                p.get('quantite'),
+                p.get('prix_u'),
+                p.get('bon'),
+                p.get('refac'),
+                p.get('montant_brut')
+            ))
+            
+            product_id = cursor.lastrowid
+            receipts = p.get('receipts', [])
+            for r in receipts:
+                cursor.execute('''
+                    INSERT INTO product_receipts (
+                        product_id, receipt_ref, receipt_date, quantity
+                    ) VALUES (?, ?, ?, ?)
+                ''', (
+                    product_id,
+                    r.get('ref'),
+                    r.get('date'),
+                    r.get('qte')
+                ))
+            
+        # 4. Insert new retenues
+        for r in retenues_list:
+            if r.get('amount', 0) > 0 or r.get('nbre'):
+                cursor.execute('''
+                    INSERT INTO retenues (
+                        invoice_id, name, nbre, pu, amount
+                    ) VALUES (?, ?, ?, ?, ?)
+                ''', (
+                    invoice_id,
+                    r.get('name'),
+                    r.get('nbre'),
+                    r.get('pu'),
+                    r.get('amount')
+                ))
+            
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"[DB ERROR] Full update failed: {e}")
+        return False
+    finally:
+        conn.close()
+
 def get_all_invoices(query=None, wilaya="Tous", product="Tous", status="Tous"):
     """Fetches all invoices, optionally filtered by search text, wilaya, product, and status."""
     conn = sqlite3.connect("invoices.db")
@@ -273,7 +388,7 @@ def get_all_invoices(query=None, wilaya="Tous", product="Tous", status="Tous"):
     where_sql = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
     
     try:
-        cursor.execute(f"SELECT * FROM invoices {where_sql} ORDER BY created_at DESC LIMIT 150", params)
+        cursor.execute(f"SELECT * FROM invoices {where_sql} ORDER BY created_at DESC", params)
         rows = cursor.fetchall()
         return rows
     except Exception as e:

@@ -122,6 +122,17 @@ class HistoryFrame(ctk.CTkFrame):
         if self.on_back:
             self.on_back()
 
+    def start_edit(self, inv_id):
+        """Loads an invoice for editing and switches to the dashboard."""
+        if hasattr(self.master, 'load_invoice_for_edit'):
+            self.master.load_invoice_for_edit(inv_id)
+        elif hasattr(self.master.master, 'load_invoice_for_edit'):
+            # In case of nested frames in MainApplication
+            self.master.master.load_invoice_for_edit(inv_id)
+        
+        if self.on_back:
+            self.on_back()
+
     def _set_status(self, text):
         self.status_bar.configure(text=text, text_color="#1f538d")
 
@@ -253,7 +264,14 @@ class HistoryFrame(ctk.CTkFrame):
             btn_toggle = ctk.CTkButton(row_frame, text=toggle_text, width=80, height=30, 
                                        fg_color=toggle_color, font=ctk.CTkFont(family="Poppins", size=13))
             btn_toggle.configure(command=lambda i_id=inv_id, s_lbl=status_lbl, btn=btn_toggle: self.toggle_status(i_id, s_lbl, btn))
-            btn_toggle.grid(row=0, column=6, padx=(5, 10), pady=2, sticky="w")
+            btn_toggle.grid(row=0, column=6, padx=5, pady=2, sticky="w")
+            
+            btn_edit = ctk.CTkButton(row_frame, text="✏️+", width=40, height=30, 
+                                     fg_color="#FBC02D", text_color="black", font=ctk.CTkFont(size=14, weight="bold"),
+                                     command=lambda i_id=inv_id: self.start_edit(i_id))
+            btn_edit.grid(row=0, column=7, padx=(5, 10), pady=2, sticky="w")
+            btn_edit.bind("<Enter>", lambda e: self._set_status("✏️+ Charger pour modification (Mise à jour)."))
+            btn_edit.bind("<Leave>", self._clear_status)
 
         # Schedule next sub-chunk if within the same page
         if end_index < page_end:

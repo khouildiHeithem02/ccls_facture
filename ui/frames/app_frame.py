@@ -22,6 +22,7 @@ class AppFrame(ctk.CTkFrame):
         self.on_show_history = on_show_history
         self.last_focused_input = None
         self.current_receipts = [] # Track receipts for current product being entered
+        self.edit_mode_invoice_id = None # Track if we are editing an existing invoice
         
         # Load products and setup UI
         self.reload_products()
@@ -182,13 +183,8 @@ class AppFrame(ctk.CTkFrame):
         prod_frame.grid_columnconfigure(3, weight=1)
         row_idx += 1
         
-        tk.Label(prod_frame, text="Détails des Produits", font=("Poppins", 15, "bold"), bg="#dbdbdb", fg="black").grid(row=0, column=0, columnspan=2, pady=15)
+        tk.Label(prod_frame, text="Détails des Produits", font=("Poppins", 15, "bold"), bg="#dbdbdb", fg="black").grid(row=0, column=0, columnspan=4, pady=15)
         
-        self.multi_prod_var = ctk.BooleanVar(value=False)
-        self.multi_prod_check = ctk.CTkCheckBox(prod_frame, text="Plusieurs produits ?", variable=self.multi_prod_var, 
-                                                font=ctk.CTkFont(family="Poppins", size=15, weight="bold"))
-        self.multi_prod_check.grid(row=0, column=2, columnspan=2, padx=20, sticky="e")
-
         tk.Label(prod_frame, text="Nature de produit", font=("Poppins", 11), bg="#dbdbdb", fg="black").grid(row=1, column=0, padx=10, pady=10, sticky="e")
         self.nature_var = ctk.StringVar(value=" ")
         self.nature_menu = ctk.CTkOptionMenu(prod_frame, values=self.current_product_list, variable=self.nature_var, 
@@ -409,9 +405,9 @@ class AppFrame(ctk.CTkFrame):
         else: messagebox.showwarning("Validation", "NIF incorrect (20 chiffres)."); self.nif_entry.focus()
     def _on_piece_enter(self, e=None):
         if len(self.piece_entry.get().strip()) == 9:
-            # Removed popup: automatically entering product entry mode
-            self.multi_prod_var.set(True)
+            # Entering product entry mode directly
             for entry in [self.nature_menu, self.manage_receipts_btn, self.bon_entry, self.refac_entry]: entry.configure(state="normal")
+
             self.quantite_entry.configure(state="readonly")
             self.nature_menu.focus()
             self.nature_menu._clicked() # Auto-dropdown
@@ -474,11 +470,14 @@ class AppFrame(ctk.CTkFrame):
         
         if len(self.added_products) >= 5:
             self._go_to_taxes()
-        elif jump_to_taxes or not self.multi_prod_var.get(): 
+        elif jump_to_taxes: 
             self._go_to_taxes()
         else: 
+            # Reset Nature and focus for next product
+            self.nature_var.set(" ")
             self.nature_menu.focus()
             self.nature_menu._clicked() # Auto-dropdown
+
 
     def _go_to_taxes(self):
         for tax in self.tax_inputs:
@@ -504,13 +503,66 @@ class AppFrame(ctk.CTkFrame):
             self.calculate()
 
     def clear_all(self):
+        """Resets the entire application to a fresh state for the next farmer."""
+        self.edit_mode_invoice_id = None
+        # 1. Identity Reset
         for e in [self.farmer_entry, self.remis_entry, self.nif_entry, self.piece_entry]: 
-            e.configure(state="normal"); e.delete(0, 'end')
+            e.configure(state="normal")
+            e.delete(0, 'end')
+            e.configure(border_color=["#979797", "#3d3d3d"])
+        
+        # Reset restricted states
+        for e in [self.remis_entry, self.nif_entry, self.piece_entry]:
+            e.configure(state="disabled")
+            
         self.wilaya_var.set(" ")
-        self.clear_products()
+        self.wilaya_menu.configure(state="disabled")
+        self.edit_id_btn.configure(text="Modifier l'identité ✏️", fg_color="#37474F", state="disabled", command=self.unlock_identity)
+        
+        # Refresh Decompte Number
+        self.decompte_entry.configure(state="normal")
+        self.decompte_entry.delete(0, 'end')
+        year = datetime.datetime.now().year
+        self.decompte_entry.insert(0, f"{self.current_count}/{year}")
+        self.decompte_entry.configure(state="disabled")
+        
+        # 2. Products Reset
+        self.clear_products(focus_nature=False)
         self.current_receipts = []
+        self.nature_var.set(" ")
+        self.nature_menu.configure(state="disabled")
+        self.manage_receipts_btn.configure(state="disabled")
+        self.quantite_entry.configure(state="normal")
+        self.quantite_entry.delete(0, 'end')
+        self.quantite_entry.configure(state="readonly")
+        self.bon_entry.configure(state="disabled")
+        self.bon_entry.delete(0, 'end')
+        self.refac_entry.configure(state="disabled")
+        self.refac_entry.delete(0, 'end')
+        self.to_taxes_btn.configure(state="disabled")
+        
+        # 3. Taxes Reset
+        for tax in self.tax_inputs:
+            for field in [tax["nbre"], tax["pu"], tax["amount"]]:
+                field.configure(state="normal")
+                field.delete(0, 'end')
+                # Re-insert defaults if any
+                if tax["name"] == "taxe pour compte CNA" and field == tax["pu"]: 
+                    field.insert(0, "15")
+                field.configure(state="disabled" if tax["name"] in ["taxe pour compte CNA", "taxe pour chambre agricole"] else "normal")
+        
+        self.tax_done_btn.configure(state="normal", text="Confirm Taxes (Done)", fg_color="#3B8ED0")
+        
+        # 4. Global State Reset
+        self._compiled_data = {}
+
         self.res_lbl.configure(text="Totals will be calculated automatically.")
-        self.farmer_entry.focus()
+        
+        # Scroll to top
+        self.scrollable_frame._parent_canvas.yview_moveto(0)
+        
+        # Initial Focus
+        self.after(200, lambda: self.farmer_entry.focus())
 
     def calculate(self):
         farmer, addr = self.farmer_entry.get().strip(), self.remis_entry.get().strip()
@@ -543,9 +595,17 @@ class AppFrame(ctk.CTkFrame):
                 tax["nbre"].insert(0, f"{total_weight:.2f}"); tax["pu"].insert(0, "15"); tax["amount"].insert(0, f"{amount:.2f}")
                 for e in [tax["nbre"], tax["pu"], tax["amount"]]: e.configure(state="disabled")
             elif name == "taxe pour chambre agricole":
+                # Determine dynamic P.U display: 5 for Orge, 3 for others, 3/5 for mixed
+                has_orge = any("ORGE" in p["nature"].upper() for p in products)
+                has_other = any("ORGE" not in p["nature"].upper() for p in products)
+                
+                if has_orge and has_other: pu_display = "3/5"
+                elif has_orge: pu_display = "5"
+                else: pu_display = "3"
+                
                 amount = sum(p["quantite"] * (5 if "ORGE" in p["nature"].upper() else 3) for p in products)
                 for e in [tax["nbre"], tax["pu"], tax["amount"]]: e.configure(state="normal"); e.delete(0, 'end')
-                tax["nbre"].insert(0, f"{total_weight:.2f}"); tax["pu"].insert(0, "3/5"); tax["amount"].insert(0, f"{amount:.2f}")
+                tax["nbre"].insert(0, f"{total_weight:.2f}"); tax["pu"].insert(0, pu_display); tax["amount"].insert(0, f"{amount:.2f}")
                 for e in [tax["nbre"], tax["pu"], tax["amount"]]: e.configure(state="disabled")
             else:
                 amount = self.safe_float(tax["amount"].get())
@@ -572,13 +632,129 @@ class AppFrame(ctk.CTkFrame):
         
         temp_path = os.path.join(os.getcwd(), "temp_preview.pdf")
         generate_facture_pdf(self._compiled_data, temp_path)
-        InvoicePreviewWindow(self, temp_path, self.finalize_generation)
+        InvoicePreviewWindow(self, temp_path, self.finalize_generation, on_cancel=self.handle_preview_cancel)
+
+    def handle_preview_cancel(self):
+        """Unlocks the UI for corrections if the user cancels the PDF preview."""
+        # 1. Unlock Products Section
+        for entry in [self.nature_menu, self.manage_receipts_btn, self.bon_entry, self.refac_entry]: 
+            entry.configure(state="normal")
+        self.quantite_entry.configure(state="readonly")
+        
+        # 2. Unlock Taxes Section (only editable amounts)
+        for tax in self.tax_inputs:
+            if tax["name"] not in ["taxe pour compte CNA", "taxe pour chambre agricole"]:
+                tax["amount"].configure(state="normal")
+            
+        # 3. Reset Buttons
+        if self.edit_mode_invoice_id:
+            self.tax_done_btn.configure(state="normal", text="Mettre à jour la Facture ✅", fg_color="#2E7D32")
+        else:
+            self.tax_done_btn.configure(state="normal", text="Confirm Taxes (Done)", fg_color="#3B8ED0")
+            
+        self.edit_id_btn.configure(state="normal") # Allow fixing identity mistakes too
+        
+        # 4. Scroll to Taxes and Focus on first editable tax (3rd row)
+        for tax in self.tax_inputs:
+             if tax["name"] == "redevance CH AGP":
+                  self._scroll_to_widget(tax["amount"])
+                  self.after(200, lambda t=tax["amount"]: t.focus())
+                  break
 
     def finalize_generation(self):
-        database.save_invoice(self._compiled_data, "")
-        messagebox.showinfo("Success", "Facture enregistrée !")
-        self.current_count += 1; self.save_count(self.current_count)
+        if self.edit_mode_invoice_id:
+            # Update existing
+            success = database.update_invoice_full(self.edit_mode_invoice_id, self._compiled_data, "")
+            if success:
+                messagebox.showinfo("Succès", "Facture mise à jour avec succès !")
+            else:
+                messagebox.showerror("Erreur", "Échec de la mise à jour en base de données.")
+        else:
+            # Save new
+            database.save_invoice(self._compiled_data, "")
+            messagebox.showinfo("Success", "Facture enregistrée !")
+            self.current_count += 1; self.save_count(self.current_count)
+            
         self.clear_all()
+
+    def load_data_for_edit(self, data, invoice_id):
+        """Loads existing invoice data into the form for editing."""
+        self.clear_all()
+        self.edit_mode_invoice_id = invoice_id
+        
+        # 1. Load Identity
+        ident = data['identity']
+        self.farmer_entry.configure(state="normal")
+        self.farmer_entry.delete(0, 'end')
+        self.farmer_entry.insert(0, ident['farmer'])
+        
+        self.remis_entry.configure(state="normal")
+        self.remis_entry.delete(0, 'end')
+        self.remis_entry.insert(0, ident['adresse'])
+        
+        self.wilaya_var.set(ident['wilaya'])
+        self.wilaya_menu.configure(state="normal")
+        
+        self.nif_entry.configure(state="normal")
+        self.nif_entry.delete(0, 'end')
+        self.nif_entry.insert(0, ident.get('nif', ''))
+        
+        self.piece_entry.configure(state="normal")
+        self.piece_entry.delete(0, 'end')
+        self.piece_entry.insert(0, ident['piece_identite'])
+        
+        self.date_var.set(ident['date'])
+        
+        self.decompte_entry.configure(state="normal")
+        self.decompte_entry.delete(0, 'end')
+        self.decompte_entry.insert(0, ident['decompte'])
+        self.decompte_entry.configure(state="disabled")
+        
+        # 2. Load Products
+        self.added_products = []
+        for p in data['products']:
+            # Reconstruct product dictionary
+            self.added_products.append({
+                "nature": p['nature'],
+                "quantite": p['quantite'],
+                "prix_u": p['prix_u'],
+                "bon": p['bon'],
+                "refac": p['refac'],
+                "montant_brut": p['montant_brut'],
+                "receipts": list(p.get('receipts', []))
+            })
+        
+        self._refresh_product_list_ui()
+        self.prod_count_lbl.configure(text=f"Produits: {len(self.added_products)} / {self.max_products}")
+        
+        # 3. Load Taxes (Retenues)
+        # We'll just calculate them based on loaded products for auto-calculated ones,
+        # but for manual ones we need to find them in the data.
+        self.calculate() # This will auto-fill CNA/Chambre
+        
+        # Map existing retenues amounts back to inputs if they aren't auto-calculated
+        for r in data['retenues']:
+            if r['name'] not in ["taxe pour compte CNA", "taxe pour chambre agricole"]:
+                for t_in in self.tax_inputs:
+                    if t_in['name'] == r['name']:
+                        t_in['amount'].configure(state="normal")
+                        t_in['amount'].delete(0, 'end')
+                        t_in['amount'].insert(0, f"{r['amount']:.2f}")
+                        break
+        
+        # 4. Finalize UI State
+        self.tax_done_btn.configure(text="Mettre à jour la Facture ✅", fg_color="#2E7D32")
+        self.edit_id_btn.configure(state="normal")
+        self.to_taxes_btn.configure(state="normal")
+        
+        # Unlock product entry section
+        for entry in [self.nature_menu, self.manage_receipts_btn, self.bon_entry, self.refac_entry]: 
+            entry.configure(state="normal")
+        
+        # Lock identity again by default (user can click Modify if needed)
+        self.lock_identity()
+        
+        messagebox.showinfo("Mode Edition", f"Facture {ident['decompte']} chargée pour modification.")
 
     def open_receipts_dialog(self, product_idx=None):
         """Opens the receipts manager. If index provided, edits existing product's receipts."""

@@ -19,8 +19,14 @@ class LoginFrame(ctk.CTkFrame):
         # Logo handling
         try:
             # Look for logo in the root project folder
-            logo_path = os.path.join(os.getcwd(), "logo.png")
-            if os.path.exists(logo_path):
+            logo_path = None
+            for ext in [".png", ".jpg", ".jpeg"]:
+                test_path = os.path.join(os.getcwd(), f"logo{ext}")
+                if os.path.exists(test_path):
+                    logo_path = test_path
+                    break
+                    
+            if logo_path:
                 img = Image.open(logo_path)
                 self.logo_img = ctk.CTkImage(light_image=img, dark_image=img, size=(120, 140))
                 self.logo_label = ctk.CTkLabel(self.main_frame, image=self.logo_img, text="")

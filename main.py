@@ -87,6 +87,15 @@ class MainApplication(ctk.CTk):
         # Refresh list and show
         self.frames["history"].refresh_list()
         self.frames["history"].tkraise()
+
+    def load_invoice_for_edit(self, invoice_id):
+        """Fetches invoice details and populates the dashboard frame for editing."""
+        data = database.get_invoice_details(invoice_id)
+        if data:
+            if "dashboard" in self.frames:
+                self.frames["dashboard"].load_data_for_edit(data, invoice_id)
+            else:
+                messagebox.showerror("Erreur", "Le tableau de bord n'est pas chargé.")
 if __name__ == "__main__":
     # Ensure database is initialized once at the very start
     database.init_db()

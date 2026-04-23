@@ -160,6 +160,10 @@ class HistoryWindow(ctk.CTkToplevel):
         
         btn_refresh = ctk.CTkButton(filter_frame, text="🔄 Actualiser", width=100, command=self.refresh_list, fg_color="#37474F")
         btn_refresh.pack(side="right", padx=5)
+
+        self.results_count_lbl = ctk.CTkLabel(filter_frame, text="Recherche...", font=ctk.CTkFont(size=11, slant="italic"), text_color="#90caf9")
+        self.results_count_lbl.pack(side="right", padx=15)
+
         
         # Header for the list - Using unified column configure
         header_frame = tk.Frame(self, bg="gray20")
@@ -272,10 +276,14 @@ class HistoryWindow(ctk.CTkToplevel):
         invoices = database.get_all_invoices(query if query else None, wilaya, product)
 
         if not invoices:
+            self.results_count_lbl.configure(text="0 résultat trouvé")
             lbl = tk.Label(self.list_frame, text="Aucune facture trouvée.",
                            font=("Segoe UI", 11, "italic"), bg="#2b2b2b", fg="gray")
             lbl.pack(pady=20)
             return
+
+        self.results_count_lbl.configure(text=f"{len(invoices)} résultats trouvés")
+
 
         # Configure shared column layout on the list container
         for i, weight in enumerate([0, 0, 1, 0, 0]):
@@ -314,6 +322,18 @@ class HistoryWindow(ctk.CTkToplevel):
             btn_regen.pack(side="left", padx=2, pady=5)
             btn_regen.bind("<Enter>", lambda e: self._set_status("🔄 Régénérer le PDF."))
             btn_regen.bind("<Leave>", self._clear_status)
+
+            btn_edit = ctk.CTkButton(actions_frame, text="✏️+", width=40, height=25,
+                                     fg_color="#FBC02D", text_color="black", font=ctk.CTkFont(size=14, weight="bold"),
+                                     command=lambda i_id=inv_id: self.start_edit(i_id))
+            btn_edit.pack(side="left", padx=2, pady=5)
+            btn_edit.bind("<Enter>", lambda e: self._set_status("✏️+ Charger pour modification (Mise à jour)."))
+            btn_edit.bind("<Leave>", self._clear_status)
+
+    def start_edit(self, inv_id):
+        """Loads an invoice for editing and closes the history window."""
+        self.master.load_invoice_for_edit(inv_id)
+        self.destroy()
 
     def view_pdf(self, path):
         if path and os.path.exists(path):

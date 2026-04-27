@@ -8,6 +8,10 @@ import tkinter as tk
 from tkinter import messagebox
 from pdf_generator import generate_facture_pdf
 import database
+try:
+    from tkcalendar import DateEntry
+except ImportError:
+    DateEntry = None
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -666,10 +670,29 @@ class App(ctk.CTkToplevel):
         
         # Row 4: Date & Decompte
         ctk.CTkLabel(id_frame, text="Derifier le (Date)").grid(row=4, column=0, padx=10, pady=5, sticky="e")
-        self.date_entry = ctk.CTkEntry(id_frame)
-        self.date_entry.insert(0, datetime.datetime.now().strftime("%d/%m/%Y"))
-        self.date_entry.grid(row=4, column=1, padx=10, pady=5, sticky="w")
-        self.date_entry.configure(state="disabled")
+        if DateEntry:
+            self.date_entry = DateEntry(id_frame, width=15, background='#1f538d',
+                                       foreground='white', borderwidth=2, date_pattern='dd/mm/yyyy',
+                                       font=("Poppins", 13),
+                                       headersbackground='#1f538d',
+                                       headersforeground='white',
+                                       selectbackground='#1565C0',
+                                       selectforeground='white',
+                                       normalbackground='white',
+                                       normalforeground='black',
+                                       weekendbackground='#f0f0f0',
+                                       weekendforeground='black',
+                                       othermonthbackground='#f8f9fa',
+                                       othermonthforeground='gray',
+                                       othermonthwebackground='#f8f9fa',
+                                       othermonthweforeground='gray')
+            self.date_entry.grid(row=4, column=1, padx=10, pady=5, sticky="w")
+            self.date_entry.bind("<Button-1>", lambda e: self.date_entry.drop_down())
+        else:
+            self.date_entry = ctk.CTkEntry(id_frame)
+            self.date_entry.insert(0, datetime.datetime.now().strftime("%d/%m/%Y"))
+            self.date_entry.grid(row=4, column=1, padx=10, pady=5, sticky="w")
+            self.date_entry.configure(state="disabled")
         
         ctk.CTkLabel(id_frame, text="Decompte N°").grid(row=4, column=2, padx=10, pady=5, sticky="e")
         self.decompte_entry = ctk.CTkEntry(id_frame)

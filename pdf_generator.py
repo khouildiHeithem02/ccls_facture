@@ -126,7 +126,12 @@ de Ouargla"""
     for p in products:
         qte = p.get('quantite', 0)
         prix = p.get('prix_u', 0)
+        
+        # Ensure m_avant is calculated if missing or zero
         m_avant = p.get('montant_avant_tax', 0)
+        if m_avant <= 0:
+            m_avant = qte * prix
+            
         bon = p.get('bon', 0)
         refac = p.get('refac', 0)
         m_brut = p.get('montant_brut', 0)

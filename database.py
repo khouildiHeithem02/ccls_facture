@@ -363,8 +363,8 @@ def update_invoice_full(invoice_id, data, pdf_path):
     finally:
         conn.close()
 
-def get_all_invoices(query=None, wilaya="Tous", product="Tous", status="Tous"):
-    """Fetches all invoices, optionally filtered by search text, wilaya, product, and status."""
+def get_all_invoices(query=None, wilaya="Tous", product="Tous", status="Tous", start_date=None, end_date=None):
+    """Fetches all invoices, optionally filtered by search text, wilaya, product, status and date range."""
     conn = sqlite3.connect("invoices.db")
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
@@ -384,6 +384,19 @@ def get_all_invoices(query=None, wilaya="Tous", product="Tous", status="Tous"):
     if status != "Tous":
         where_clauses.append("payment_status = ?")
         params.append(status)
+        
+    # Date Range Filter: Invoices table uses 'date' column in DD / MM / YYYY format
+    # For SQLite, we compare strings carefully or convert if needed. 
+    # Since we use formatted strings, we'll implement a logic to filter by date.
+    # Handles both 'DD/MM/YYYY' and 'DD / MM / YYYY'
+    date_sql = "CASE WHEN date LIKE '% / %' THEN substr(date,10,4)||'-'||substr(date,6,2)||'-'||substr(date,1,2) ELSE substr(date,7,4)||'-'||substr(date,4,2)||'-'||substr(date,1,2) END"
+    
+    if start_date:
+        where_clauses.append(f"{date_sql} >= ?")
+        params.append(start_date)
+    if end_date:
+        where_clauses.append(f"{date_sql} <= ?")
+        params.append(end_date)
         
     where_sql = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
     
@@ -474,7 +487,7 @@ def get_invoice_details(invoice_id):
     finally:
         conn.close()
 
-def get_filtered_totals(query=None, wilaya="Tous", product="Tous", status="Tous"):
+def get_filtered_totals(query=None, wilaya="Tous", product="Tous", status="Tous", start_date=None, end_date=None):
     """Calculates grand totals for a set of invoices filtered by search, wilaya, product, and status."""
     conn = sqlite3.connect("invoices.db")
     cursor = conn.cursor()
@@ -494,6 +507,16 @@ def get_filtered_totals(query=None, wilaya="Tous", product="Tous", status="Tous"
     if status != "Tous":
         where_clauses.append("payment_status = ?")
         params.append(status)
+        
+    # Handles both 'DD/MM/YYYY' and 'DD / MM / YYYY'
+    date_sql = "CASE WHEN date LIKE '% / %' THEN substr(date,10,4)||'-'||substr(date,6,2)||'-'||substr(date,1,2) ELSE substr(date,7,4)||'-'||substr(date,4,2)||'-'||substr(date,1,2) END"
+    
+    if start_date:
+        where_clauses.append(f"{date_sql} >= ?")
+        params.append(start_date)
+    if end_date:
+        where_clauses.append(f"{date_sql} <= ?")
+        params.append(end_date)
         
     where_sql = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
     inner_id_query = f"SELECT id FROM invoices {where_sql}"
@@ -530,7 +553,7 @@ def get_filtered_totals(query=None, wilaya="Tous", product="Tous", status="Tous"
     finally:
         conn.close()
 
-def get_grouped_accumulation(query=None, wilaya="Tous", product="Tous", status="Tous"):
+def get_grouped_accumulation(query=None, wilaya="Tous", product="Tous", status="Tous", start_date=None, end_date=None):
     """Retrieves totals grouped by product nature, respecting all filters."""
     conn = sqlite3.connect("invoices.db")
     cursor = conn.cursor()
@@ -550,6 +573,14 @@ def get_grouped_accumulation(query=None, wilaya="Tous", product="Tous", status="
     if status != "Tous":
         where_clauses.append("i.payment_status = ?")
         params.append(status)
+        
+    date_sql = "CASE WHEN i.date LIKE '% / %' THEN substr(i.date,10,4)||'-'||substr(i.date,6,2)||'-'||substr(i.date,1,2) ELSE substr(i.date,7,4)||'-'||substr(i.date,4,2)||'-'||substr(i.date,1,2) END"
+    if start_date:
+        where_clauses.append(f"{date_sql} >= ?")
+        params.append(start_date)
+    if end_date:
+        where_clauses.append(f"{date_sql} <= ?")
+        params.append(end_date)
         
     where_sql = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
 

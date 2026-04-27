@@ -11,6 +11,10 @@ from ui.windows.admin_panel import AdminPanelWindow
 from ui.windows.preview_window import InvoicePreviewWindow
 from ui.windows.dialogs import ReceiptsDialog, PasswordDialog
 from config import TAXES_LIST
+try:
+    from tkcalendar import DateEntry
+except ImportError:
+    DateEntry = None
 
 class AppFrame(ctk.CTkFrame):
     def __init__(self, master, username="admin", role="user", on_disconnect=None, on_show_history=None):
@@ -116,7 +120,7 @@ class AppFrame(ctk.CTkFrame):
         
         tk.Label(id_frame, text="Identity Details", font=("Poppins", 15, "bold"), bg="#dbdbdb", fg="black").grid(row=0, column=0, columnspan=4, pady=15)
         
-        tk.Label(id_frame, text="Nom de l'agriculteur", font=("Poppins", 11), bg="#dbdbdb", fg="black").grid(row=1, column=0, padx=10, pady=10, sticky="e")
+        tk.Label(id_frame, text="Nom de l'agriculteur", font=("Poppins", 14), bg="#dbdbdb", fg="black").grid(row=1, column=0, padx=10, pady=10, sticky="e")
         self.farmer_entry = ctk.CTkEntry(id_frame, font=ctk.CTkFont(family="Poppins", size=16), height=40)
         self.farmer_entry.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
         vcmd_farmer = (self.register(self._validate_farmer), '%P')
@@ -132,7 +136,7 @@ class AppFrame(ctk.CTkFrame):
         self.wilaya_var = ctk.StringVar(value=" ")
         self.wilaya_menu = ctk.CTkOptionMenu(id_frame, values=["Ouargla", "Tougourt", "Ilizi"], 
                                              variable=self.wilaya_var, command=self._on_wilaya_choice, state="disabled",
-                                             font=ctk.CTkFont(family="Poppins", size=15), height=35)
+                                             font=ctk.CTkFont(family="Poppins", size=15), height=40)
         self.wilaya_menu.grid(row=2, column=1, padx=10, pady=10, sticky="w")
 
         ctk.CTkLabel(id_frame, text="NIF (Facultatif)", font=ctk.CTkFont(family="Poppins", size=15)).grid(row=3, column=0, padx=10, pady=10, sticky="e")
@@ -152,13 +156,13 @@ class AppFrame(ctk.CTkFrame):
         self.piece_entry.bind("<Return>", self._on_piece_enter)
         
         ctk.CTkLabel(id_frame, text="Vérifier le (Date)", font=ctk.CTkFont(family="Poppins", size=15)).grid(row=4, column=0, padx=10, pady=10, sticky="e")
-        self.date_var = ctk.StringVar(value=datetime.datetime.now().strftime("%d/%m/%Y"))
-        self.date_var.trace_add("write", self._auto_format_invoice_date)
-        self.date_entry = ctk.CTkEntry(id_frame, font=ctk.CTkFont(family="Poppins", size=15), height=35, textvariable=self.date_var)
+        self.date_entry = ctk.CTkEntry(id_frame, font=ctk.CTkFont(family="Poppins", size=16), height=40, width=150)
+        self.date_entry.insert(0, datetime.datetime.now().strftime("%d/%m/%Y"))
         self.date_entry.grid(row=4, column=1, padx=10, pady=10, sticky="w")
+        self.date_entry.configure(state="disabled")
         
         ctk.CTkLabel(id_frame, text="Decompte N°", font=ctk.CTkFont(family="Poppins", size=15)).grid(row=4, column=2, padx=10, pady=10, sticky="e")
-        self.decompte_entry = ctk.CTkEntry(id_frame, font=ctk.CTkFont(family="Poppins", size=15), height=35)
+        self.decompte_entry = ctk.CTkEntry(id_frame, font=ctk.CTkFont(family="Poppins", size=16, weight="bold"), height=40, width=150)
         self.current_count = self.load_count()
         year = datetime.datetime.now().year
         self.decompte_entry.insert(0, f"{self.current_count}/{year}")
@@ -185,32 +189,32 @@ class AppFrame(ctk.CTkFrame):
         
         tk.Label(prod_frame, text="Détails des Produits", font=("Poppins", 15, "bold"), bg="#dbdbdb", fg="black").grid(row=0, column=0, columnspan=4, pady=15)
         
-        tk.Label(prod_frame, text="Nature de produit", font=("Poppins", 11), bg="#dbdbdb", fg="black").grid(row=1, column=0, padx=10, pady=10, sticky="e")
+        tk.Label(prod_frame, text="Nature de produit", font=("Poppins", 14), bg="#dbdbdb", fg="black").grid(row=1, column=0, padx=10, pady=10, sticky="e")
         self.nature_var = ctk.StringVar(value=" ")
         self.nature_menu = ctk.CTkOptionMenu(prod_frame, values=self.current_product_list, variable=self.nature_var, 
-                                             command=self._on_nature_choice, state="disabled", font=ctk.CTkFont(family="Poppins", size=15), height=35)
+                                             command=self._on_nature_choice, state="disabled", font=ctk.CTkFont(family="Poppins", size=15), height=40)
         self.nature_menu.grid(row=1, column=1, padx=10, pady=10, sticky="w")
         self.nature_menu.bind("<Return>", self._on_nature_enter)
         
-        tk.Label(prod_frame, text="Quantité", font=("Poppins", 11), bg="#dbdbdb", fg="black").grid(row=1, column=2, padx=10, pady=10, sticky="e")
+        tk.Label(prod_frame, text="Quantité", font=("Poppins", 14), bg="#dbdbdb", fg="black").grid(row=1, column=2, padx=10, pady=10, sticky="e")
         qty_subframe = tk.Frame(prod_frame, bg="#dbdbdb")
         qty_subframe.grid(row=1, column=3, padx=10, pady=10, sticky="w")
         
-        self.quantite_entry = ctk.CTkEntry(qty_subframe, state="readonly", font=ctk.CTkFont(family="Poppins", size=16), height=35, width=100)
+        self.quantite_entry = ctk.CTkEntry(qty_subframe, state="readonly", font=ctk.CTkFont(family="Poppins", size=18, weight="bold"), height=40, width=150)
         self.quantite_entry.pack(side="left")
         
         self.manage_receipts_btn = ctk.CTkButton(qty_subframe, text="📦 Bons", width=60, height=35, state="disabled", 
                                                  command=self.open_receipts_dialog, fg_color="#FBC02D", text_color="black")
         self.manage_receipts_btn.pack(side="left", padx=5)
         
-        tk.Label(prod_frame, text="Bonification", font=("Poppins", 11), bg="#dbdbdb", fg="black").grid(row=2, column=0, padx=10, pady=10, sticky="e")
-        self.bon_entry = ctk.CTkEntry(prod_frame, state="disabled", font=ctk.CTkFont(family="Poppins", size=16), height=35)
+        tk.Label(prod_frame, text="Bonification", font=("Poppins", 14), bg="#dbdbdb", fg="black").grid(row=2, column=0, padx=10, pady=10, sticky="e")
+        self.bon_entry = ctk.CTkEntry(prod_frame, state="disabled", font=ctk.CTkFont(family="Poppins", size=16), height=40)
         self.bon_entry.grid(row=2, column=1, padx=10, pady=10, sticky="w")
         self.bon_entry.bind("<Return>", self._on_bon_enter)
         self.bon_entry.bind("<Control-Return>", lambda e: self._on_bon_enter(e, jump_to_taxes=True))
         
-        tk.Label(prod_frame, text="Réfaction", font=("Poppins", 11), bg="#dbdbdb", fg="black").grid(row=2, column=2, padx=10, pady=10, sticky="e")
-        self.refac_entry = ctk.CTkEntry(prod_frame, state="disabled", font=ctk.CTkFont(family="Poppins", size=16), height=35)
+        tk.Label(prod_frame, text="Réfaction", font=("Poppins", 14), bg="#dbdbdb", fg="black").grid(row=2, column=2, padx=10, pady=10, sticky="e")
+        self.refac_entry = ctk.CTkEntry(prod_frame, state="disabled", font=ctk.CTkFont(family="Poppins", size=16), height=40)
         self.refac_entry.grid(row=2, column=3, padx=10, pady=10, sticky="w")
         self.refac_entry.bind("<Return>", self._on_refac_enter)
         self.refac_entry.bind("<Control-Return>", lambda e: self._on_refac_enter(e, jump_to_taxes=True))
@@ -244,15 +248,15 @@ class AppFrame(ctk.CTkFrame):
         
         tk.Label(tax_frame, text="Retenues Diverses", font=("Poppins", 16, "bold"), bg="#dbdbdb", fg="black").grid(row=0, column=0, columnspan=4, pady=15)
         
-        tk.Label(tax_frame, text="Tax Name", font=("Poppins", 11, "bold"), bg="#dbdbdb", fg="black").grid(row=1, column=0, padx=5, pady=5, sticky="w")
-        tk.Label(tax_frame, text="Quantité", font=("Poppins", 11, "bold"), bg="#dbdbdb", fg="black").grid(row=1, column=1, padx=5, pady=5)
-        tk.Label(tax_frame, text="P.U", font=("Poppins", 11, "bold"), bg="#dbdbdb", fg="black").grid(row=1, column=2, padx=5, pady=5)
-        tk.Label(tax_frame, text="Amount / Total", font=("Poppins", 11, "bold"), bg="#dbdbdb", fg="black").grid(row=1, column=3, padx=5, pady=5)
+        tk.Label(tax_frame, text="Tax Name", font=("Poppins", 14, "bold"), bg="#dbdbdb", fg="black").grid(row=1, column=0, padx=5, pady=5, sticky="w")
+        tk.Label(tax_frame, text="Quantité", font=("Poppins", 14, "bold"), bg="#dbdbdb", fg="black").grid(row=1, column=1, padx=5, pady=5)
+        tk.Label(tax_frame, text="P.U", font=("Poppins", 14, "bold"), bg="#dbdbdb", fg="black").grid(row=1, column=2, padx=5, pady=5)
+        tk.Label(tax_frame, text="Amount / Total", font=("Poppins", 14, "bold"), bg="#dbdbdb", fg="black").grid(row=1, column=3, padx=5, pady=5)
         
         self.tax_inputs = []
         for i, tax_name in enumerate(TAXES_LIST):
             r = i + 2
-            tk.Label(tax_frame, text=tax_name, font=("Poppins", 10), bg="#dbdbdb", fg="black").grid(row=r, column=0, padx=5, pady=8, sticky="w")
+            tk.Label(tax_frame, text=tax_name, font=("Poppins", 14), bg="#dbdbdb", fg="black").grid(row=r, column=0, padx=5, pady=8, sticky="w")
             
             if tax_name in ["taxe pour compte CNA", "taxe pour chambre agricole"]:
                 nbre_en = ctk.CTkEntry(tax_frame, width=80)
@@ -264,7 +268,7 @@ class AppFrame(ctk.CTkFrame):
                 if tax_name == "taxe pour compte CNA": pu_en.insert(0, "15")
                 pu_en.configure(state="disabled")
                 
-                amount_en = ctk.CTkEntry(tax_frame, width=120, height=35, font=ctk.CTkFont(family="Poppins", size=15))
+                amount_en = ctk.CTkEntry(tax_frame, width=150, height=45, font=ctk.CTkFont(family="Poppins", size=18, weight="bold"))
                 amount_en.grid(row=r, column=3, padx=5, pady=5)
                 amount_en.configure(state="disabled")
             else:
@@ -272,7 +276,7 @@ class AppFrame(ctk.CTkFrame):
                 nbre_en.grid_forget()
                 pu_en = ctk.CTkEntry(tax_frame, width=120)
                 pu_en.grid_forget()
-                amount_en = ctk.CTkEntry(tax_frame, width=120, height=35, font=ctk.CTkFont(family="Poppins", size=15))
+                amount_en = ctk.CTkEntry(tax_frame, width=150, height=45, font=ctk.CTkFont(family="Poppins", size=18, weight="bold"))
                 amount_en.grid(row=r, column=3, padx=5, pady=5)
             
             amount_en.bind("<KeyRelease>", lambda e: self.calculate())
@@ -291,6 +295,13 @@ class AppFrame(ctk.CTkFrame):
         self.res_lbl.pack(pady=25)
         
         self.after(200, lambda: self.farmer_entry.focus())
+
+    def _on_date_click(self, event):
+        """Programmatically open the date picker dropdown."""
+        try:
+            self.date_entry.drop_down()
+        except:
+            pass
 
     def _disconnect(self):
         if self.on_disconnect: self.on_disconnect()
@@ -367,14 +378,22 @@ class AppFrame(ctk.CTkFrame):
     def _on_nif_key(self, e=None): self.nif_entry.configure(border_color="red" if self.nif_entry.get().strip() and len(self.nif_entry.get().strip()) != 20 else ["#979797", "#3d3d3d"])
     def _on_piece_key(self, e=None): self.piece_entry.configure(border_color="red" if len(self.piece_entry.get().strip()) != 9 else ["#979797", "#3d3d3d"])
 
+    def _validate_date_mask(self, P, S, d, i):
+        """Flexible Date Masking (DD/MM/YYYY)."""
+        if d == '0': return True # Always allow deletion
+        if not S.isdigit(): return False # Only digits allowed
+        
+        l = len(P)
+        if l > 10: return False # Max length
+        
+        # Auto-insert slash only if typing at the end
+        if i == str(l-1):
+            if l in [2, 5]:
+                self.date_entry.insert(int(i), '/')
+        return True
+
     def _auto_format_invoice_date(self, *args):
-        val = self.date_var.get().replace("/", "")
-        if len(val) > 8: val = val[:8]
-        formatted = ""
-        if len(val) >= 1: formatted += val[:2]
-        if len(val) >= 3: formatted += "/" + val[2:4]
-        if len(val) >= 5: formatted += "/" + val[4:8]
-        if self.date_var.get() != formatted: self.date_var.set(formatted)
+        pass # Deprecated by professional validator
 
     def safe_float(self, v):
         try:
@@ -510,6 +529,11 @@ class AppFrame(ctk.CTkFrame):
             e.configure(state="normal")
             e.delete(0, 'end')
             e.configure(border_color=["#979797", "#3d3d3d"])
+        
+        self.date_entry.configure(state="normal")
+        self.date_entry.delete(0, 'end')
+        self.date_entry.insert(0, datetime.datetime.now().strftime("%d/%m/%Y"))
+        self.date_entry.configure(state="disabled")
         
         # Reset restricted states
         for e in [self.remis_entry, self.nif_entry, self.piece_entry]:
@@ -703,7 +727,10 @@ class AppFrame(ctk.CTkFrame):
         self.piece_entry.delete(0, 'end')
         self.piece_entry.insert(0, ident['piece_identite'])
         
-        self.date_var.set(ident['date'])
+        self.date_entry.configure(state="normal")
+        self.date_entry.delete(0, 'end')
+        self.date_entry.insert(0, ident['date'])
+        self.date_entry.configure(state="disabled")
         
         self.decompte_entry.configure(state="normal")
         self.decompte_entry.delete(0, 'end')

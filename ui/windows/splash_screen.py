@@ -70,15 +70,19 @@ class SplashScreen(ctk.CTk):
         self.after(3500, self.finish)
         
     def animate_progress(self, val):
+        if not self.winfo_exists(): return
         if val <= 1.0:
             self.progress.set(val)
             self.anim_id = self.after(30, lambda: self.animate_progress(val + 0.01))
             
     def finish(self):
         if self.anim_id:
-            self.after_cancel(self.anim_id)
-        self.quit()
-        self.destroy()
+            try:
+                self.after_cancel(self.anim_id)
+            except: pass
+        if self.winfo_exists():
+            self.quit()
+            self.destroy()
 
 if __name__ == "__main__":
     app = SplashScreen()

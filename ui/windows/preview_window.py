@@ -63,29 +63,56 @@ class InvoicePreviewWindow(ctk.CTkToplevel):
         self.scroll_canvas = ctk.CTkScrollableFrame(main_frame, fg_color="#f0f0f0")
         self.scroll_canvas.pack(side="top", fill="both", expand=True, pady=(0, 10))
         
+        # Zooming state - Start at 1.0 (Standard view)
+        self.zoom_level = 1.0
+        
         # Render the PDF to an image
+        self._render_pdf()
+        
+        # Bind Mouse Wheel for Zoom
+        self.bind("<Control-MouseWheel>", self._on_mouse_wheel) # Windows
+        self.image_label.bind("<Control-MouseWheel>", self._on_mouse_wheel)
+        
+    def _on_mouse_wheel(self, event):
+        """Handles Control + Scroll for zooming."""
+        if event.delta > 0:
+            self.zoom_level = min(5.0, self.zoom_level + 0.3)
+        else:
+            self.zoom_level = max(1.0, self.zoom_level - 0.3)
+        self._render_pdf()
+
+    def _render_pdf(self):
+        """Renders the PDF at the current zoom level."""
         try:
-            doc = fitz.open(pdf_path)
-            page = doc.load_page(0)  # Load first page
+            doc = fitz.open(self.pdf_path)
+            page = doc.load_page(0)
             
-            # Increase resolution for sharpness (zoom=2.0)
-            zoom = 2.0
-            mat = fitz.Matrix(zoom, zoom)
+            # Use high-quality rendering base (2.0) even for 1.0 zoom to keep text sharp
+            render_scale = 2.0 * self.zoom_level
+            mat = fitz.Matrix(render_scale, render_scale)
             pix = page.get_pixmap(matrix=mat)
             
-            # Convert pixmap to PIL Image
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
             
-            # Convert to CTkImage
-            self.preview_image = ctk.CTkImage(light_image=img, dark_image=img, size=(pix.width//2.5, pix.height//2.5))
+            # Calculate display size: Fit to window width or standard scale
+            # We want the image to be readable at 1.0 without being massive
+            display_w = pix.width // 2
+            display_h = pix.height // 2
             
-            # Display image centered
-            self.image_label = ctk.CTkLabel(self.scroll_canvas, image=self.preview_image, text="")
-            self.image_label.pack(expand=True, padx=20, pady=20)
+            self.preview_image = ctk.CTkImage(light_image=img, dark_image=img, size=(display_w, display_h))
+            
+            if hasattr(self, 'image_label'):
+                self.image_label.configure(image=self.preview_image)
+            else:
+                self.image_label = ctk.CTkLabel(self.scroll_canvas, image=self.preview_image, text="")
+                self.image_label.pack(expand=True, padx=20, pady=20)
             doc.close()
         except Exception as e:
-            ctk.CTkLabel(self.scroll_canvas, text=f"Error rendering preview: {e}").pack(pady=50)
-        
+            if hasattr(self, 'image_label'):
+                self.image_label.configure(text=f"Error rendering: {e}", image=None)
+            else:
+                ctk.CTkLabel(self.scroll_canvas, text=f"Error rendering preview: {e}").pack(pady=50)
+
     def on_cancel(self):
         try:
             # Delete the temp file (always for view, and if cancelled for creation)

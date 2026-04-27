@@ -79,11 +79,32 @@ class ReceiptsDialog(ctk.CTkToplevel):
         self.ref_en.bind("<Return>", lambda e: self.date_en.focus_set())
         
         ctk.CTkLabel(entry_frame, text="Date", font=ctk.CTkFont(size=12, weight="bold")).grid(row=0, column=1, padx=5, pady=(5, 2))
-        # Date Entry with dynamic formatting
-        self.date_en = ctk.CTkEntry(entry_frame, width=150, height=35, placeholder_text="JJ / MM / AAAA")
-        self.date_en.grid(row=1, column=1, padx=5, pady=(0, 10))
-        self.date_en.bind("<KeyRelease>", self._auto_format_date)
-        self.date_en.bind("<Return>", lambda e: self.qte_en.focus())
+        if DateEntry:
+            self.date_en = DateEntry(entry_frame, width=12, background='#1f538d',
+                                    foreground='white', borderwidth=2, date_pattern='dd/mm/yyyy',
+                                    font=("Poppins", 11),
+                                    headersbackground='#1f538d',
+                                    headersforeground='white',
+                                    selectbackground='#1565C0',
+                                    selectforeground='white',
+                                    normalbackground='white',
+                                    normalforeground='black',
+                                    weekendbackground='#f0f0f0',
+                                    weekendforeground='black',
+                                    othermonthbackground='#f8f9fa',
+                                    othermonthforeground='gray',
+                                    othermonthwebackground='#f8f9fa',
+                                    othermonthweforeground='gray')
+            self.date_en.grid(row=1, column=1, padx=5, pady=(0, 10), sticky="ew")
+            # Set to current date by default to avoid empty value
+            self.date_en.set_date(datetime.datetime.now())
+            self.date_en.bind("<Button-1>", lambda e: self.date_en.drop_down())
+        else:
+            self.date_en = ctk.CTkEntry(entry_frame, width=120, height=35, placeholder_text="JJ/MM/AAAA")
+            self.date_en.grid(row=1, column=1, padx=5, pady=(0, 10))
+            vcmd = (self.register(self._validate_date_mask), '%P', '%S', '%d', '%i')
+            self.date_en.configure(validate='key', validatecommand=vcmd)
+            self.date_en.bind("<Return>", lambda e: self.qte_en.focus())
 
 
         ctk.CTkLabel(entry_frame, text="Quantité", font=ctk.CTkFont(size=12, weight="bold")).grid(row=0, column=2, padx=5, pady=(5, 2))
@@ -108,24 +129,15 @@ class ReceiptsDialog(ctk.CTkToplevel):
         self._refresh_list()
         self.after(100, self.ref_en.focus_set)
 
-    def _auto_format_date(self, e=None):
-        """Automatically insert slashes for DD / MM / YYYY formatting."""
-        if e and e.keysym == "BackSpace": return
-        
-        # Extract only digits
-        val = "".join([c for c in self.date_en.get() if c.isdigit()])
-        if len(val) > 8: val = val[:8]
-        
-        parts = []
-        if len(val) > 0: parts.append(val[:2])
-        if len(val) > 2: parts.append(val[2:4])
-        if len(val) > 4: parts.append(val[4:8])
-        
-        formatted = " / ".join(parts)
-        
-        if self.date_en.get() != formatted:
-            self.date_en.delete(0, 'end')
-            self.date_en.insert(0, formatted)
+    def _validate_date_mask(self, P, S, d, i):
+        if d == '0': return True # Deletion
+        if not S.isdigit(): return False # Digits only
+        l = len(P)
+        if l > 10: return False
+        if i == str(l-1): # Typing at the end
+            if l in [2, 5]:
+                self.date_en.insert(int(i), '/')
+        return True
             
         # Update border color automatically when 8 digits are reached
         if len(val) == 8:
@@ -151,7 +163,10 @@ class ReceiptsDialog(ctk.CTkToplevel):
 
     def _add_receipt(self):
         ref = self.ref_en.get().strip()
-        date_str = self.date_en.get().strip()
+        if DateEntry and isinstance(self.date_en, DateEntry):
+            date_str = self.date_en.get_date().strftime("%d/%m/%Y")
+        else:
+            date_str = self.date_en.get().strip()
         
         # 1. Validation Logic (Reusing the helper)
         is_valid, error_msg = self._validate_date_value(date_str)
@@ -178,7 +193,10 @@ class ReceiptsDialog(ctk.CTkToplevel):
         # 3. Clear ALL fields as requested
         self.ref_en.delete(0, 'end')
         self.qte_en.delete(0, 'end')
-        self.date_en.delete(0, 'end')
+        if DateEntry and isinstance(self.date_en, DateEntry):
+            self.date_en.set_date(datetime.datetime.now())
+        else:
+            self.date_en.delete(0, 'end')
         
         self._refresh_list()
         self.ref_en.focus()
@@ -210,5 +228,39 @@ class ReceiptsDialog(ctk.CTkToplevel):
             messagebox.showwarning("Attention", "Veuillez ajouter au moins un bon.", parent=self); return
         if self.on_save:
             self.on_save(self.receipts)
+        self.destroy()
+
+class DownloadSelectionDialog(ctk.CTkToplevel):
+    def __init__(self, parent, on_select=None):
+        super().__init__(parent)
+        self.title("Choisir le format")
+        self.geometry("350x250")
+        self.resizable(False, False)
+        self.attributes("-topmost", True)
+        self.grab_set()
+        
+        self.on_select = on_select
+        
+        ctk.CTkLabel(self, text="Format de téléchargement", 
+                     font=ctk.CTkFont(size=18, weight="bold")).pack(pady=20)
+        
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=20, pady=10)
+        
+        # PDF Option
+        self.btn_pdf = ctk.CTkButton(btn_frame, text="📄 Format PDF", height=45,
+                                     fg_color="#C62828", hover_color="#B71C1C",
+                                     command=lambda: self._choose("pdf"))
+        self.btn_pdf.pack(fill="x", pady=5)
+        
+        # Excel Option
+        self.btn_excel = ctk.CTkButton(btn_frame, text="📊 Format Excel", height=45,
+                                       fg_color="#2E7D32", hover_color="#1B5E20",
+                                       command=lambda: self._choose("excel"))
+        self.btn_excel.pack(fill="x", pady=5)
+
+    def _choose(self, format_type):
+        if self.on_select:
+            self.on_select(format_type)
         self.destroy()
 

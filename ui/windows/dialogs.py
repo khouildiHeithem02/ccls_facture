@@ -80,16 +80,17 @@ class ReceiptsDialog(ctk.CTkToplevel):
         
         ctk.CTkLabel(entry_frame, text="Date", font=ctk.CTkFont(size=12, weight="bold")).grid(row=0, column=1, padx=5, pady=(5, 2))
         if DateEntry:
-            # Container for premium styling matching History page
-            self.date_container = ctk.CTkFrame(entry_frame, fg_color="white", corner_radius=6, border_width=1, border_color="#1976D2")
-            self.date_container.grid(row=1, column=1, padx=5, pady=(0, 10), sticky="ew")
+            # Container for premium styling matching History page - Fixed size to match others
+            self.date_container = ctk.CTkFrame(entry_frame, width=120, height=35, fg_color="white", corner_radius=6, border_width=1, border_color="#1976D2")
+            self.date_container.grid(row=1, column=1, padx=5, pady=(0, 10))
+            self.date_container.grid_propagate(False)
             
-            self.date_en = DateEntry(self.date_container, width=12, background='#1976D2',
+            self.date_en = DateEntry(self.date_container, background='#1976D2',
                                     foreground='white', borderwidth=0, date_pattern='dd/mm/yyyy',
-                                    font=("Poppins", 11),
+                                    font=("Poppins", 12),
                                     headersbackground='#1976D2',
                                     headersforeground='white')
-            self.date_en.pack(padx=5, pady=2, fill="x")
+            self.date_en.pack(fill="both", expand=True, padx=5, pady=2)
             # Set to current date by default to avoid empty value
             self.date_en.set_date(datetime.datetime.now())
             self.date_en.bind("<Button-1>", lambda e: self.date_en.drop_down())

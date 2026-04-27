@@ -161,8 +161,12 @@ class HistoryFrame(ctk.CTkFrame):
         ctk.CTkLabel(self.header_frame, text="Actions", width=180, font=h_font).grid(row=0, column=5, padx=5)
         
         # Scrollable list
-        self.list_frame = ctk.CTkScrollableFrame(self)
-        self.list_frame.pack(fill="both", expand=True, padx=20, pady=(10, 0))
+        self.list_frame = ctk.CTkScrollableFrame(self, fg_color="#f8f9fa")
+        self.list_frame.pack(fill="both", expand=True, padx=20, pady=5)
+        
+        # Safe container for items to avoid destroying internal scrollbar widgets
+        self.items_container = tk.Frame(self.list_frame, bg="#f8f9fa")
+        self.items_container.pack(fill="both", expand=True)
         
         # Pagination Bar (Guarantees zero lag by limiting widget count)
         self.pagination_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -195,13 +199,11 @@ class HistoryFrame(ctk.CTkFrame):
             self.header_frame.pack_forget()
             self.list_frame.pack_forget()
             self.pagination_frame.pack_forget()
-            self.accum_frame.pack_forget()
             self.status_bar.pack_forget()
             
             self.header_frame.pack(fill="x", padx=20, pady=0)
             self.list_frame.pack(fill="both", expand=True, padx=20, pady=(10, 0))
             self.pagination_frame.pack(fill="x", padx=20, pady=5)
-            self.accum_frame.pack(fill="x", padx=20, pady=10)
             self.status_bar.pack(pady=10)
         else:
             self.date_fields_frame.pack_forget()
@@ -297,6 +299,10 @@ class HistoryFrame(ctk.CTkFrame):
 
     def refresh_list(self, reset_page=True):
         """Fetches data and starts the chunked rendering process to keep UI responsive."""
+        if hasattr(self, "_search_after_id") and self._search_after_id:
+            try: self.after_cancel(self._search_after_id)
+            except: pass
+            
         if reset_page:
             self.current_page = 0
             
@@ -304,13 +310,18 @@ class HistoryFrame(ctk.CTkFrame):
         self._current_render_id = getattr(self, "_current_render_id", 0) + 1
         render_id = self._current_render_id
         
-        # Clear existing
-        for widget in self.list_frame.winfo_children():
-            widget.destroy()
-            
-        # Loading Indicator
-        self.loading_lbl = ctk.CTkLabel(self.list_frame, text="⏳ Chargement des données...", 
-                                        font=ctk.CTkFont(family="Poppins", size=16, slant="italic"))
+        # Clear existing items safely
+        if hasattr(self, "items_container") and self.items_container.winfo_exists():
+            for widget in self.items_container.winfo_children():
+                widget.destroy()
+        else:
+            # Recreate if lost
+            self.items_container = tk.Frame(self.list_frame, bg="#f8f9fa")
+            self.items_container.pack(fill="both", expand=True)
+
+        # Loading Indicator (pack inside items_container)
+        self.loading_lbl = tk.Label(self.items_container, text="⏳ Chargement des données...", 
+                                     bg="#f8f9fa", font=("Poppins", 16, "italic"), fg="#1f538d")
         self.loading_lbl.pack(pady=30)
         
         # Fetch data from DB
@@ -329,7 +340,7 @@ class HistoryFrame(ctk.CTkFrame):
             self.loading_lbl.destroy()
         
         if not self.all_invoices:
-            tk.Label(self.list_frame, text="Aucune facture trouvée.", bg="white",
+            tk.Label(self.items_container, text="Aucune facture trouvée.", bg="#f8f9fa",
                      font=("Poppins", 14), fg="gray").pack(pady=30)
             self._update_pagination_buttons(0)
             return
@@ -381,7 +392,7 @@ class HistoryFrame(ctk.CTkFrame):
             status_val = inv["payment_status"]
             
             # Use native tk.Frame for the row container (ultra-lightweight)
-            row_frame = tk.Frame(self.list_frame, bg="white", highlightthickness=1, highlightbackground="#eeeeee")
+            row_frame = tk.Frame(self.items_container, bg="white", highlightthickness=1, highlightbackground="#eeeeee")
             row_frame.pack(fill="x", pady=1, padx=5)
             
             # Use native tk.Label with fixed widths for ultra-smooth scrolling

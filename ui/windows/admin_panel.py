@@ -52,6 +52,19 @@ class AdminPanelWindow(ctk.CTkToplevel):
             ctk.CTkLabel(f, text=f"({r})", text_color="gray").pack(side="left", padx=10)
             if u != "admin": # Primary admin protection
                 ctk.CTkButton(f, text="X", width=30, fg_color="#C62828", command=lambda un=u: self._del_user_cmd(un)).pack(side="right", padx=10)
+            
+            # Add Modify button for all users (including admin)
+            ctk.CTkButton(f, text="Modifier Pass", width=110, height=30, fg_color="#1976D2", 
+                          command=lambda un=u: self._modify_pass_cmd(un)).pack(side="right", padx=5)
+
+    def _modify_pass_cmd(self, username):
+        dialog = ctk.CTkInputDialog(text=f"Nouveau mot de passe pour {username}:", title="Modifier Password")
+        new_pass = dialog.get_input()
+        if new_pass is not None and new_pass.strip() != "":
+            if database.update_user_password(username, new_pass.strip()):
+                messagebox.showinfo("Succès", f"Mot de passe de {username} mis à jour.")
+            else:
+                messagebox.showerror("Erreur", "Impossible de mettre à jour le mot de passe.")
 
     def _add_user_cmd(self):
         u = self.new_user_entry.get().strip()

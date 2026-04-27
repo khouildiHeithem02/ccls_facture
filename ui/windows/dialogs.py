@@ -80,22 +80,16 @@ class ReceiptsDialog(ctk.CTkToplevel):
         
         ctk.CTkLabel(entry_frame, text="Date", font=ctk.CTkFont(size=12, weight="bold")).grid(row=0, column=1, padx=5, pady=(5, 2))
         if DateEntry:
-            self.date_en = DateEntry(entry_frame, width=12, background='#1f538d',
-                                    foreground='white', borderwidth=2, date_pattern='dd/mm/yyyy',
+            # Container for premium styling matching History page
+            self.date_container = ctk.CTkFrame(entry_frame, fg_color="white", corner_radius=6, border_width=1, border_color="#1976D2")
+            self.date_container.grid(row=1, column=1, padx=5, pady=(0, 10), sticky="ew")
+            
+            self.date_en = DateEntry(self.date_container, width=12, background='#1976D2',
+                                    foreground='white', borderwidth=0, date_pattern='dd/mm/yyyy',
                                     font=("Poppins", 11),
-                                    headersbackground='#1f538d',
-                                    headersforeground='white',
-                                    selectbackground='#1565C0',
-                                    selectforeground='white',
-                                    normalbackground='white',
-                                    normalforeground='black',
-                                    weekendbackground='#f0f0f0',
-                                    weekendforeground='black',
-                                    othermonthbackground='#f8f9fa',
-                                    othermonthforeground='gray',
-                                    othermonthwebackground='#f8f9fa',
-                                    othermonthweforeground='gray')
-            self.date_en.grid(row=1, column=1, padx=5, pady=(0, 10), sticky="ew")
+                                    headersbackground='#1976D2',
+                                    headersforeground='white')
+            self.date_en.pack(padx=5, pady=2, fill="x")
             # Set to current date by default to avoid empty value
             self.date_en.set_date(datetime.datetime.now())
             self.date_en.bind("<Button-1>", lambda e: self.date_en.drop_down())
@@ -171,13 +165,19 @@ class ReceiptsDialog(ctk.CTkToplevel):
         # 1. Validation Logic (Reusing the helper)
         is_valid, error_msg = self._validate_date_value(date_str)
         if not is_valid:
-            self.date_en.configure(border_color="red")
+            if hasattr(self, "date_container"):
+                self.date_container.configure(border_color="red")
+            elif isinstance(self.date_en, ctk.CTkEntry):
+                self.date_en.configure(border_color="red")
             messagebox.showwarning("Erreur Date", error_msg, parent=self)
             self.date_en.focus_set()
             return
             
         # Reset color on success
-        self.date_en.configure(border_color=["#979797", "#3d3d3d"])
+        if hasattr(self, "date_container"):
+            self.date_container.configure(border_color="#1976D2")
+        elif isinstance(self.date_en, ctk.CTkEntry):
+            self.date_en.configure(border_color=["#979797", "#3d3d3d"])
 
         try:
             qte = float(self.qte_en.get())

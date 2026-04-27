@@ -682,6 +682,19 @@ def delete_user(username):
     conn.close()
     return True
 
+def update_user_password(username, new_password):
+    conn = sqlite3.connect("invoices.db")
+    cursor = conn.cursor()
+    try:
+        hashed_pw = hashlib.sha256(new_password.encode()).hexdigest()
+        cursor.execute("UPDATE users SET password = ? WHERE username = ?", (hashed_pw, username))
+        conn.commit()
+        return True
+    except:
+        return False
+    finally:
+        conn.close()
+
 # --- PRODUCT MANAGEMENT ---
 def get_db_products():
     conn = sqlite3.connect("invoices.db")
